@@ -1179,7 +1179,6 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====================
 # ANALYS
 # ====================
-```python
 async def cross(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(context.args) < 2:
@@ -1504,7 +1503,6 @@ async def cross(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ در بررسی کراس‌ها خطایی رخ داد."
         )
-```
 # ==========================
 # CROSS
 # =========================
