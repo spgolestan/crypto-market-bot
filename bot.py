@@ -465,6 +465,12 @@ async def start_telegram():
             price
         )
     )
+    telegram_application.add_handler(
+        CommandHandler(
+            "candles",
+            candles
+        )
+    )
 
     await telegram_application.initialize()
 
