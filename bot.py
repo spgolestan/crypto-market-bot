@@ -279,6 +279,185 @@ async def candles(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ دریافت اطلاعات کندلی با خطا مواجه شد."
         )
 # =========================
+# کندل
+# =========================
+async def rsi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "فرمت دستور:\n\n"
+            "/rsi BTC 1h\n\n"
+            "مثال:\n"
+            "/rsi BTC 1h"
+        )
+        return
+
+    symbol = context.args[0].upper()
+    timeframe = context.args[1].lower()
+
+    symbols = {
+        "BTC": "BTC-USD",
+        "ETH": "ETH-USD"
+    }
+
+    if symbol not in symbols:
+        await update.message.reply_text(
+            "فعلاً فقط BTC و ETH فعال هستند."
+        )
+        return
+
+    timeframes = {
+        "1m": 60,
+        "5m": 300,
+        "15m": 900,
+        "1h": 3600,
+        "6h": 21600,
+        "1d": 86400
+    }
+
+    if timeframe not in timeframes:
+        await update.message.reply_text(
+            "تایم‌فریم‌های قابل استفاده:\n\n"
+            "1m\n"
+            "5m\n"
+            "15m\n"
+            "1h\n"
+            "6h\n"
+            "1d"
+        )
+        return
+
+    product_id = symbols[symbol]
+
+    url = (
+        f"https://api.exchange.coinbase.com/"
+        f"products/{product_id}/candles"
+    )
+
+    params = {
+        "granularity": timeframes[timeframe]
+    }
+
+    try:
+
+        async with httpx.AsyncClient(timeout=10) as client:
+
+            response = await client.get(
+                url,
+                params=params,
+                headers={
+                    "Accept": "application/json"
+                }
+            )
+
+            response.raise_for_status()
+
+            data = response.json()
+
+        if len(data) < 15:
+            await update.message.reply_text(
+                "❌ برای محاسبه RSI داده کافی دریافت نشد."
+            )
+            return
+
+        # Coinbase:
+        # [time, low, high, open, close, volume]
+
+        # مرتب‌سازی از قدیمی به جدید
+        data = sorted(
+            data,
+            key=lambda x: x[0]
+        )
+
+        closes = [
+            float(candle[4])
+            for candle in data
+        ]
+
+        period = 14
+
+        gains = []
+        losses = []
+
+        for i in range(1, len(closes)):
+
+            change = closes[i] - closes[i - 1]
+
+            if change > 0:
+                gains.append(change)
+                losses.append(0)
+            else:
+                gains.append(0)
+                losses.append(abs(change))
+
+        avg_gain = sum(
+            gains[:period]
+        ) / period
+
+        avg_loss = sum(
+            losses[:period]
+        ) / period
+
+        for i in range(period, len(gains)):
+
+            avg_gain = (
+                (avg_gain * (period - 1))
+                + gains[i]
+            ) / period
+
+            avg_loss = (
+                (avg_loss * (period - 1))
+                + losses[i]
+            ) / period
+
+        if avg_loss == 0:
+
+            rsi_value = 100
+
+        else:
+
+            rs = avg_gain / avg_loss
+
+            rsi_value = (
+                100
+                - (100 / (1 + rs))
+            )
+
+        if rsi_value >= 70:
+
+            status = "🔴 محدوده اشباع خرید"
+
+        elif rsi_value <= 30:
+
+            status = "🟢 محدوده اشباع فروش"
+
+        else:
+
+            status = "🟡 محدوده میانی"
+
+        message = (
+            f"📊 RSI Analysis\n\n"
+            f"🪙 {symbol}/USD\n"
+            f"⏱ تایم‌فریم: {timeframe}\n\n"
+            f"RSI(14): {rsi_value:.2f}\n\n"
+            f"وضعیت: {status}"
+        )
+
+        await update.message.reply_text(
+            message
+        )
+
+    except Exception as e:
+
+        print(
+            f"RSI API error: {e}",
+            flush=True
+        )
+
+        await update.message.reply_text(
+            "❌ محاسبه RSI با خطا مواجه شد."
+        )
+# =========================
 # HTTP Server
 # =========================
 
@@ -469,6 +648,12 @@ async def start_telegram():
         CommandHandler(
             "candles",
             candles
+        )
+    )
+    telegram_application.add_handler(
+        CommandHandler(
+            "rsi",
+            rsi
         )
     )
 
