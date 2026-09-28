@@ -457,6 +457,172 @@ async def rsi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ محاسبه RSI با خطا مواجه شد."
         )
+# ===================
+# RSI
+# ==================
+async def macd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "لطفاً ارز و تایم‌فریم را وارد کن.\n\n"
+            "مثال:\n"
+            "/macd BTC 1h"
+        )
+        return
+
+    symbol = context.args[0].upper()
+    timeframe = context.args[1].lower()
+
+    symbols = {
+        "BTC": "BTC-USD",
+        "ETH": "ETH-USD"
+    }
+
+    timeframes = {
+        "1m": 60,
+        "5m": 300,
+        "15m": 900,
+        "1h": 3600,
+        "6h": 21600,
+        "1d": 86400
+    }
+
+    if symbol not in symbols:
+        await update.message.reply_text(
+            "فعلاً فقط BTC و ETH فعال هستند."
+        )
+        return
+
+    if timeframe not in timeframes:
+        await update.message.reply_text(
+            "تایم‌فریم نامعتبر است.\n\n"
+            "تایم‌فریم‌های مجاز:\n"
+            "1m\n"
+            "5m\n"
+            "15m\n"
+            "1h\n"
+            "6h\n"
+            "1d"
+        )
+        return
+
+    product_id = symbols[symbol]
+    granularity = timeframes[timeframe]
+
+    url = (
+        f"https://api.exchange.coinbase.com/"
+        f"products/{product_id}/candles"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+
+            response = await client.get(
+                url,
+                params={"granularity": granularity},
+                headers={"Accept": "application/json"}
+            )
+
+            response.raise_for_status()
+            data = response.json()
+
+        if len(data) < 35:
+            await update.message.reply_text(
+                "❌ اطلاعات کافی برای محاسبه MACD دریافت نشد."
+            )
+            return
+
+        # مرتب‌سازی از قدیمی به جدید
+        data.sort(key=lambda x: x[0])
+
+        closes = [float(candle[4]) for candle in data]
+
+        # EMA
+        def calculate_ema(values, period):
+
+            multiplier = 2 / (period + 1)
+
+            ema = sum(values[:period]) / period
+            ema_values = [ema]
+
+            for price in values[period:]:
+                ema = (
+                    (price - ema) * multiplier
+                    + ema
+                )
+
+                ema_values.append(ema)
+
+            return ema_values
+
+        # EMA 12
+        ema12 = calculate_ema(closes, 12)
+
+        # EMA 26
+        ema26 = calculate_ema(closes, 26)
+
+        # برای هم‌تراز شدن EMA12 با EMA26
+        ema12_aligned = ema12[14:]
+
+        macd_values = []
+
+        for i in range(len(ema26)):
+            macd_value = (
+                ema12_aligned[i]
+                - ema26[i]
+            )
+
+            macd_values.append(macd_value)
+
+        # Signal = EMA 9 روی MACD
+        if len(macd_values) < 9:
+            await update.message.reply_text(
+                "❌ اطلاعات کافی برای محاسبه Signal وجود ندارد."
+            )
+            return
+
+        signal_values = calculate_ema(
+            macd_values,
+            9
+        )
+
+        macd_current = macd_values[-1]
+        signal_current = signal_values[-1]
+
+        histogram = (
+            macd_current
+            - signal_current
+        )
+
+        if macd_current > signal_current:
+            status = "🟢 MACD بالاتر از Signal است"
+        elif macd_current < signal_current:
+            status = "🔴 MACD پایین‌تر از Signal است"
+        else:
+            status = "🟡 MACD و Signal برابر هستند"
+
+        message = (
+            f"📊 MACD Analysis\n\n"
+            f"🪙 {symbol}/USD\n"
+            f"⏱ تایم‌فریم: {timeframe}\n\n"
+            f"MACD: {macd_current:.4f}\n"
+            f"Signal: {signal_current:.4f}\n"
+            f"Histogram: {histogram:.4f}\n\n"
+            f"وضعیت: {status}"
+        )
+
+        await update.message.reply_text(message)
+
+    except Exception as e:
+
+        print(
+            f"MACD API error: {e}",
+            flush=True
+        )
+
+        await update.message.reply_text(
+            "❌ دریافت اطلاعات MACD با خطا مواجه شد."
+        )
 # =========================
 # HTTP Server
 # =========================
@@ -655,6 +821,9 @@ async def start_telegram():
             "rsi",
             rsi
         )
+    )
+    telegram_application.add_handler(
+        CommandHandler("macd", macd)
     )
 
     await telegram_application.initialize()
