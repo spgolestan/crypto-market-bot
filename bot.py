@@ -1,4 +1,5 @@
 import os
+import asyncio
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -8,10 +9,21 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 
 # =========================
+# Settings
+# =========================
+
+RENDER_URL = "https://crypto-market-bot-ozg7.onrender.com"
+WEBHOOK_PATH = "/telegram-webhook"
+
+WEBHOOK_URL = RENDER_URL + WEBHOOK_PATH
+
+
+# =========================
 # Telegram Commands
 # =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     await update.message.reply_text(
         "سلام 👋\n"
         "ربات تحلیل بازار فعال است.\n\n"
@@ -24,11 +36,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
+
         await update.message.reply_text(
             "لطفاً نام ارز را وارد کن.\n\n"
             "مثال:\n"
             "/price BTC"
         )
+
         return
 
     symbol = context.args[0].upper()
@@ -39,11 +53,13 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     if symbol not in symbols:
+
         await update.message.reply_text(
             "فعلاً فقط این ارزها برای تست فعال هستند:\n\n"
             "/price BTC\n"
             "/price ETH"
         )
+
         return
 
     trading_symbol = symbols[symbol]
@@ -67,8 +83,13 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             data = response.json()
 
-        price_value = float(data["lastPrice"])
-        change_24h = float(data["priceChangePercent"])
+        price_value = float(
+            data["lastPrice"]
+        )
+
+        change_24h = float(
+            data["priceChangePercent"]
+        )
 
         message = (
             f"📊 {symbol}/USDT\n\n"
@@ -76,7 +97,9 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📈 تغییر ۲۴ ساعت: {change_24h:+.2f}%"
         )
 
-        await update.message.reply_text(message)
+        await update.message.reply_text(
+            message
+        )
 
     except Exception as e:
 
@@ -89,35 +112,128 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ دریافت اطلاعات بازار با خطا مواجه شد."
         )
 
+
 # =========================
-# Render HTTP Server
+# HTTP Server
 # =========================
 
 class HealthHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
 
-        self.send_response(200)
+        if self.path == "/":
 
-        self.send_header(
-            "Content-Type",
-            "text/plain; charset=utf-8"
-        )
+            self.send_response(200)
 
+            self.send_header(
+                "Content-Type",
+                "text/plain; charset=utf-8"
+            )
+
+            self.end_headers()
+
+            self.wfile.write(
+                b"Crypto Market Bot is running!"
+            )
+
+            return
+
+        self.send_response(404)
         self.end_headers()
 
-        self.wfile.write(
-            b"Crypto Market Bot is running!"
-        )
+
+    def do_POST(self):
+
+        if self.path != WEBHOOK_PATH:
+
+            self.send_response(404)
+            self.end_headers()
+
+            return
+
+        try:
+
+            content_length = int(
+                self.headers.get(
+                    "Content-Length",
+                    0
+                )
+            )
+
+            body = self.rfile.read(
+                content_length
+            )
+
+            print(
+                "Telegram webhook received",
+                flush=True
+            )
+
+            import json
+
+            data = json.loads(
+                body.decode("utf-8")
+            )
+
+            update = Update.de_json(
+                data,
+                telegram_application.bot
+            )
+
+            asyncio.run_coroutine_threadsafe(
+                telegram_application.process_update(
+                    update
+                ),
+                event_loop
+            )
+
+            self.send_response(200)
+
+            self.send_header(
+                "Content-Type",
+                "text/plain"
+            )
+
+            self.end_headers()
+
+            self.wfile.write(
+                b"OK"
+            )
+
+        except Exception as e:
+
+            print(
+                f"Webhook error: {e}",
+                flush=True
+            )
+
+            self.send_response(500)
+            self.end_headers()
+
 
     def log_message(self, format, *args):
         return
 
 
+# =========================
+# Global objects
+# =========================
+
+telegram_application = None
+event_loop = None
+
+
+# =========================
+# HTTP Server
+# =========================
+
 def start_web_server():
 
     port = int(
-        os.environ.get("PORT", "10000")
+        os.environ.get(
+            "PORT",
+            "10000"
+        )
     )
 
     print(
@@ -139,55 +255,74 @@ def start_web_server():
 
 
 # =========================
-# Telegram Server
+# Telegram
 # =========================
 
-def start_telegram_bot():
+async def start_telegram():
+
+    global telegram_application
 
     token = os.environ.get(
         "TELEGRAM_BOT_TOKEN"
     )
 
     if not token:
+
         print(
             "ERROR: TELEGRAM_BOT_TOKEN is not set!",
             flush=True
         )
+
         return
 
     print(
-        "Starting Telegram bot...",
+        "Starting Telegram application...",
         flush=True
     )
 
-    app = (
+    telegram_application = (
         Application
         .builder()
         .token(token)
         .build()
     )
 
-    app.add_handler(
+    telegram_application.add_handler(
         CommandHandler(
             "start",
             start
         )
     )
 
-    app.add_handler(
+    telegram_application.add_handler(
         CommandHandler(
             "price",
             price
         )
     )
 
+    await telegram_application.initialize()
+
+    await telegram_application.start()
+
     print(
-        "Telegram bot is running...",
+        "Setting Telegram webhook...",
         flush=True
     )
 
-    app.run_polling(
-        stop_signals=None
+    await telegram_application.bot.set_webhook(
+        url=WEBHOOK_URL,
+        drop_pending_updates=True
+    )
+
+    print(
+        f"Webhook set: {WEBHOOK_URL}",
+        flush=True
+    )
+
+    print(
+        "Telegram bot is running with WEBHOOK!",
+        flush=True
     )
 
 
@@ -197,18 +332,26 @@ def start_telegram_bot():
 
 def main():
 
-    # اول Telegram را در Thread جدا اجرا می‌کنیم
-    telegram_thread = threading.Thread(
-        target=start_telegram_bot,
-        daemon=True
+    global event_loop
+
+    event_loop = asyncio.new_event_loop()
+
+    asyncio.set_event_loop(
+        event_loop
     )
 
-    telegram_thread.start()
+    event_loop.run_until_complete(
+        start_telegram()
+    )
 
-    # HTTP Server در Thread اصلی اجرا می‌شود
-    # بنابراین Render سریعاً پورت را می‌بیند.
+    print(
+        "Starting HTTP server...",
+        flush=True
+    )
+
     start_web_server()
 
 
 if __name__ == "__main__":
+
     main()
