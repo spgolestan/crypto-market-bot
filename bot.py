@@ -75,29 +75,75 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"products/{product_id}/ticker"
     )
 
+    stats_url = (
+        f"https://api.exchange.coinbase.com/"
+        f"products/{product_id}/stats"
+    )
+
     try:
 
         async with httpx.AsyncClient(timeout=10) as client:
 
-            response = await client.get(
+            ticker_response = await client.get(
                 url,
                 headers={
                     "Accept": "application/json"
                 }
             )
 
-            response.raise_for_status()
+            ticker_response.raise_for_status()
 
-            data = response.json()
+            ticker_data = ticker_response.json()
 
-        price_value = float(data["price"])
+            stats_response = await client.get(
+                stats_url,
+                headers={
+                    "Accept": "application/json"
+                }
+            )
+
+            stats_response.raise_for_status()
+
+            stats_data = stats_response.json()
+
+        price_value = float(
+            ticker_data["price"]
+        )
+
+        open_24h = float(
+            stats_data["open"]
+        )
+
+        high_24h = float(
+            stats_data["high"]
+        )
+
+        low_24h = float(
+            stats_data["low"]
+        )
+
+        change_24h = (
+            (price_value - open_24h)
+            / open_24h
+            * 100
+        )
+
+        if change_24h >= 0:
+            change_icon = "📈"
+        else:
+            change_icon = "📉"
 
         message = (
             f"📊 {symbol}/USD\n\n"
-            f"💰 قیمت: ${price_value:,.2f}"
+            f"💰 قیمت: ${price_value:,.2f}\n"
+            f"{change_icon} تغییر ۲۴ ساعت: {change_24h:+.2f}%\n\n"
+            f"🔺 سقف ۲۴ ساعت: ${high_24h:,.2f}\n"
+            f"🔻 کف ۲۴ ساعت: ${low_24h:,.2f}"
         )
 
-        await update.message.reply_text(message)
+        await update.message.reply_text(
+            message
+        )
 
     except Exception as e:
 
@@ -109,7 +155,6 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ دریافت اطلاعات بازار با خطا مواجه شد."
         )
-
 # =========================
 # HTTP Server
 # =========================
