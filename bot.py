@@ -34,8 +34,8 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = context.args[0].upper()
 
     symbols = {
-        "BTC": "bitcoin",
-        "ETH": "ethereum"
+        "BTC": "BTCUSDT",
+        "ETH": "ETHUSDT"
     }
 
     if symbol not in symbols:
@@ -46,14 +46,12 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    coin_id = symbols[symbol]
+    trading_symbol = symbols[symbol]
 
-    url = "https://api.coingecko.com/api/v3/simple/price"
+    url = "https://api.binance.com/api/v3/ticker/24hr"
 
     params = {
-        "ids": coin_id,
-        "vs_currencies": "usd",
-        "include_24hr_change": "true"
+        "symbol": trading_symbol
     }
 
     try:
@@ -69,14 +67,8 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             data = response.json()
 
-        coin_data = data[coin_id]
-
-        price_value = coin_data["usd"]
-
-        change_24h = coin_data.get(
-            "usd_24h_change",
-            0
-        )
+        price_value = float(data["lastPrice"])
+        change_24h = float(data["priceChangePercent"])
 
         message = (
             f"📊 {symbol}/USDT\n\n"
@@ -96,7 +88,6 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ دریافت اطلاعات بازار با خطا مواجه شد."
         )
-
 
 # =========================
 # Render HTTP Server
