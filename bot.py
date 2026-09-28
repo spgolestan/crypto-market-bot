@@ -155,6 +155,129 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ دریافت اطلاعات بازار با خطا مواجه شد."
         )
+# ==========
+async def candles(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "فرمت دستور:\n\n"
+            "/candles BTC 1h\n\n"
+            "مثال:\n"
+            "/candles BTC 1h"
+        )
+        return
+
+    symbol = context.args[0].upper()
+    timeframe = context.args[1].lower()
+
+    symbols = {
+        "BTC": "BTC-USD",
+        "ETH": "ETH-USD"
+    }
+
+    if symbol not in symbols:
+        await update.message.reply_text(
+            "فعلاً فقط BTC و ETH فعال هستند."
+        )
+        return
+
+    timeframes = {
+        "1m": 60,
+        "5m": 300,
+        "15m": 900,
+        "1h": 3600,
+        "6h": 21600,
+        "1d": 86400
+    }
+
+    if timeframe not in timeframes:
+        await update.message.reply_text(
+            "تایم‌فریم‌های قابل استفاده:\n\n"
+            "1m\n"
+            "5m\n"
+            "15m\n"
+            "1h\n"
+            "6h\n"
+            "1d"
+        )
+        return
+
+    product_id = symbols[symbol]
+
+    url = (
+        f"https://api.exchange.coinbase.com/"
+        f"products/{product_id}/candles"
+    )
+
+    params = {
+        "granularity": timeframes[timeframe]
+    }
+
+    try:
+
+        async with httpx.AsyncClient(timeout=10) as client:
+
+            response = await client.get(
+                url,
+                params=params,
+                headers={
+                    "Accept": "application/json"
+                }
+            )
+
+            response.raise_for_status()
+
+            data = response.json()
+
+        if not data:
+            await update.message.reply_text(
+                "❌ اطلاعات کندلی دریافت نشد."
+            )
+            return
+
+        # Coinbase کندل‌ها را به صورت:
+        # [time, low, high, open, close, volume]
+        # برمی‌گرداند.
+
+        candles_data = data[:5]
+
+        message = (
+            f"🕯 {symbol}/USD\n"
+            f"⏱ تایم‌فریم: {timeframe}\n\n"
+        )
+
+        for candle in candles_data:
+
+            timestamp = candle[0]
+            low = float(candle[1])
+            high = float(candle[2])
+            open_price = float(candle[3])
+            close = float(candle[4])
+            volume = float(candle[5])
+
+            message += (
+                f"━━━━━━━━━━━━\n"
+                f"Open:  ${open_price:,.2f}\n"
+                f"High:  ${high:,.2f}\n"
+                f"Low:   ${low:,.2f}\n"
+                f"Close: ${close:,.2f}\n"
+                f"Volume: {volume:,.4f}\n"
+            )
+
+        await update.message.reply_text(
+            message
+        )
+
+    except Exception as e:
+
+        print(
+            f"Candles API error: {e}",
+            flush=True
+        )
+
+        await update.message.reply_text(
+            "❌ دریافت اطلاعات کندلی با خطا مواجه شد."
+        )
 # =========================
 # HTTP Server
 # =========================
