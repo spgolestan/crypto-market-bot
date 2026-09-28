@@ -1079,6 +1079,229 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====================
 # ANALYS
 # ====================
+async def cross(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "لطفاً ارز و تایم‌فریم را وارد کن.\n\n"
+            "مثال:\n"
+            "/cross BTC 1h"
+        )
+        return
+
+    symbol = context.args[0].upper()
+    timeframe = context.args[1].lower()
+
+    symbols = {
+        "BTC": "BTC-USD",
+        "ETH": "ETH-USD"
+    }
+
+    timeframes = {
+        "1m": 60,
+        "5m": 300,
+        "15m": 900,
+        "1h": 3600,
+        "6h": 21600,
+        "1d": 86400
+    }
+
+    if symbol not in symbols:
+        await update.message.reply_text(
+            "فعلاً فقط BTC و ETH فعال هستند."
+        )
+        return
+
+    if timeframe not in timeframes:
+        await update.message.reply_text(
+            "تایم‌فریم نامعتبر است.\n\n"
+            "مجاز:\n"
+            "1m | 5m | 15m | 1h | 6h | 1d"
+        )
+        return
+
+    product_id = symbols[symbol]
+    granularity = timeframes[timeframe]
+
+    url = (
+        f"https://api.exchange.coinbase.com/"
+        f"products/{product_id}/candles"
+    )
+
+    try:
+
+        async with httpx.AsyncClient(timeout=10) as client:
+
+            response = await client.get(
+                url,
+                params={"granularity": granularity},
+                headers={"Accept": "application/json"}
+            )
+
+            response.raise_for_status()
+            data = response.json()
+
+        if len(data) < 60:
+            await update.message.reply_text(
+                "❌ اطلاعات کافی برای تشخیص کراس دریافت نشد."
+            )
+            return
+
+        data.sort(key=lambda x: x[0])
+
+        closes = [
+            float(candle[4])
+            for candle in data
+        ]
+
+        # =========================
+        # EMA
+        # =========================
+
+        def calculate_ema_series(values, period):
+
+            multiplier = 2 / (period + 1)
+
+            ema = sum(values[:period]) / period
+
+            result = [ema]
+
+            for price in values[period:]:
+                ema = (
+                    (price - ema) * multiplier
+                    + ema
+                )
+                result.append(ema)
+
+            return result
+
+        ema20 = calculate_ema_series(closes, 20)
+        ema50 = calculate_ema_series(closes, 50)
+
+        # هم‌تراز کردن EMA20 با EMA50
+        ema20_aligned = ema20[30:]
+
+        ema_cross = None
+
+        for i in range(1, len(ema50)):
+
+            previous_fast = ema20_aligned[i - 1]
+            previous_slow = ema50[i - 1]
+
+            current_fast = ema20_aligned[i]
+            current_slow = ema50[i]
+
+            if (
+                previous_fast <= previous_slow
+                and current_fast > current_slow
+            ):
+                ema_cross = "🟢 کراس صعودی EMA20/EMA50"
+
+            elif (
+                previous_fast >= previous_slow
+                and current_fast < current_slow
+            ):
+                ema_cross = "🔴 کراس نزولی EMA20/EMA50"
+
+        if ema_cross is None:
+
+            if ema20_aligned[-1] > ema50[-1]:
+                ema_status = "🟢 EMA20 بالاتر از EMA50 است"
+            else:
+                ema_status = "🔴 EMA20 پایین‌تر از EMA50 است"
+
+            ema_cross = (
+                f"⚪ کراس جدیدی مشاهده نشد\n"
+                f"{ema_status}"
+            )
+
+        # =========================
+        # MACD
+        # =========================
+
+        ema12 = calculate_ema_series(closes, 12)
+        ema26 = calculate_ema_series(closes, 26)
+
+        ema12_aligned = ema12[14:]
+
+        macd_values = []
+
+        for i in range(len(ema26)):
+
+            macd_values.append(
+                ema12_aligned[i]
+                - ema26[i]
+            )
+
+        signal_values = calculate_ema_series(
+            macd_values,
+            9
+        )
+
+        # هم‌تراز کردن MACD با Signal
+        macd_aligned = macd_values[8:]
+
+        macd_cross = None
+
+        for i in range(1, len(signal_values)):
+
+            previous_macd = macd_aligned[i - 1]
+            previous_signal = signal_values[i - 1]
+
+            current_macd = macd_aligned[i]
+            current_signal = signal_values[i]
+
+            if (
+                previous_macd <= previous_signal
+                and current_macd > current_signal
+            ):
+                macd_cross = "🟢 کراس صعودی MACD"
+
+            elif (
+                previous_macd >= previous_signal
+                and current_macd < current_signal
+            ):
+                macd_cross = "🔴 کراس نزولی MACD"
+
+        if macd_cross is None:
+
+            if macd_aligned[-1] > signal_values[-1]:
+                macd_status = "🟢 MACD بالاتر از Signal است"
+            else:
+                macd_status = "🔴 MACD پایین‌تر از Signal است"
+
+            macd_cross = (
+                f"⚪ کراس جدیدی مشاهده نشد\n"
+                f"{macd_status}"
+            )
+
+        message = (
+            f"🔄 بررسی کراس‌ها\n\n"
+            f"🪙 {symbol}/USD\n"
+            f"⏱ تایم‌فریم: {timeframe}\n\n"
+
+            f"━━ EMA ━━\n"
+            f"{ema_cross}\n\n"
+
+            f"━━ MACD ━━\n"
+            f"{macd_cross}"
+        )
+
+        await update.message.reply_text(message)
+
+    except Exception as e:
+
+        print(
+            f"Cross API error: {e}",
+            flush=True
+        )
+
+        await update.message.reply_text(
+            "❌ در بررسی کراس‌ها خطایی رخ داد."
+        )
+# ==========================
+# CROSS
+# =========================
 # =========================
 # HTTP Server
 # =========================
@@ -1286,6 +1509,9 @@ async def start_telegram():
     )
     telegram_application.add_handler(
         CommandHandler("analyze", analyze)
+    )
+    telegram_application.add_handler(
+        CommandHandler("cross", cross)
     )
     await telegram_application.initialize()
 
