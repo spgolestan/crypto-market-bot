@@ -855,10 +855,107 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     + ema_value
                 )
 
-            return ema_value
+            return ema_value    
 
+
+                def calculate_ema_series(values, period):
+
+            multiplier = 2 / (period + 1)
+
+            ema = sum(values[:period]) / period
+
+            result = [ema]
+
+            for price in values[period:]:
+
+                ema = (
+                    (price - ema) * multiplier
+                    + ema
+                )
+
+                result.append(ema)
+
+            return result
         ema20 = calculate_ema(closes, 20)
         ema50 = calculate_ema(closes, 50)
+        # =========================
+        # تشخیص کراس EMA20 / EMA50
+        # =========================
+
+        ema20_series = calculate_ema_series(closes, 20)
+        ema50_series = calculate_ema_series(closes, 50)
+
+        ema20_aligned = ema20_series[30:]
+
+        ema_cross_status = "⚪ کراس جدیدی مشاهده نشد"
+
+        for i in range(1, len(ema50_series)):
+
+            previous_fast = ema20_aligned[i - 1]
+            previous_slow = ema50_series[i - 1]
+
+            current_fast = ema20_aligned[i]
+            current_slow = ema50_series[i]
+
+            if (
+                previous_fast <= previous_slow
+                and current_fast > current_slow
+            ):
+                ema_cross_status = "🟢 کراس صعودی EMA20/EMA50"
+
+            elif (
+                previous_fast >= previous_slow
+                and current_fast < current_slow
+            ):
+                ema_cross_status = "🔴 کراس نزولی EMA20/EMA50"
+
+
+        # =========================
+        # تشخیص کراس MACD / Signal
+        # =========================
+
+        ema12_series = calculate_ema_series(closes, 12)
+        ema26_series = calculate_ema_series(closes, 26)
+
+        ema12_aligned = ema12_series[14:]
+
+        macd_series = []
+
+        for i in range(len(ema26_series)):
+
+            macd_series.append(
+                ema12_aligned[i]
+                - ema26_series[i]
+            )
+
+        signal_series = calculate_ema_series(
+            macd_series,
+            9
+        )
+
+        macd_aligned = macd_series[8:]
+
+        macd_cross_status = "⚪ کراس جدیدی مشاهده نشد"
+
+        for i in range(1, len(signal_series)):
+
+            previous_macd = macd_aligned[i - 1]
+            previous_signal = signal_series[i - 1]
+
+            current_macd = macd_aligned[i]
+            current_signal = signal_series[i]
+
+            if (
+                previous_macd <= previous_signal
+                and current_macd > current_signal
+            ):
+                macd_cross_status = "🟢 کراس صعودی MACD"
+
+            elif (
+                previous_macd >= previous_signal
+                and current_macd < current_signal
+            ):
+                macd_cross_status = "🔴 کراس نزولی MACD"
 
         # =========================
         # RSI
@@ -1057,6 +1154,9 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"EMA50: ${ema50:,.2f}\n"
             f"{ema_status}\n"
             f"{price_status}\n\n"
+            
+            f"کراس EMA: {ema_cross_status}\n"
+            f"کراس MACD: {macd_cross_status}\n\n"
 
             f"━━ جمع‌بندی ━━\n"
             f"🟢 عوامل صعودی: {bullish_points}\n"
