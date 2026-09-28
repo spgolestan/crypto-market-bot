@@ -1,6 +1,7 @@
 import os
 import asyncio
 import threading
+import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
@@ -13,9 +14,18 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 # =========================
 
 RENDER_URL = "https://crypto-market-bot-ozg7.onrender.com"
+
 WEBHOOK_PATH = "/telegram-webhook"
 
 WEBHOOK_URL = RENDER_URL + WEBHOOK_PATH
+
+
+# =========================
+# Global objects
+# =========================
+
+telegram_application = None
+event_loop = None
 
 
 # =========================
@@ -139,6 +149,7 @@ class HealthHandler(BaseHTTPRequestHandler):
             return
 
         self.send_response(404)
+
         self.end_headers()
 
 
@@ -147,6 +158,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         if self.path != WEBHOOK_PATH:
 
             self.send_response(404)
+
             self.end_headers()
 
             return
@@ -169,8 +181,6 @@ class HealthHandler(BaseHTTPRequestHandler):
                 flush=True
             )
 
-            import json
-
             data = json.loads(
                 body.decode("utf-8")
             )
@@ -180,11 +190,18 @@ class HealthHandler(BaseHTTPRequestHandler):
                 telegram_application.bot
             )
 
-            asyncio.run_coroutine_threadsafe(
-                telegram_application.process_update(
-                    update
-                ),
+            future = asyncio.run_coroutine_threadsafe(
+                telegram_application.process_update(update),
                 event_loop
+            )
+
+            future.add_done_callback(
+                lambda f: print(
+                    f"Update processing finished: {f.exception()}"
+                    if f.exception()
+                    else "Update processed successfully",
+                    flush=True
+                )
             )
 
             self.send_response(200)
@@ -208,19 +225,12 @@ class HealthHandler(BaseHTTPRequestHandler):
             )
 
             self.send_response(500)
+
             self.end_headers()
 
 
     def log_message(self, format, *args):
         return
-
-
-# =========================
-# Global objects
-# =========================
-
-telegram_application = None
-event_loop = None
 
 
 # =========================
@@ -334,22 +344,38 @@ def main():
 
     global event_loop
 
+    print(
+        "Starting main application...",
+        flush=True
+    )
+
     event_loop = asyncio.new_event_loop()
 
     asyncio.set_event_loop(
         event_loop
     )
 
+    # اول HTTP Server را بالا می‌آوریم
+    web_thread = threading.Thread(
+        target=start_web_server,
+        daemon=True
+    )
+
+    web_thread.start()
+
+    # سپس Telegram را راه‌اندازی می‌کنیم
     event_loop.run_until_complete(
         start_telegram()
     )
 
     print(
-        "Starting HTTP server...",
+        "Event loop is now running...",
         flush=True
     )
 
-    start_web_server()
+    # بسیار مهم:
+    # Event Loop باید همیشه در حال اجرا بماند
+    event_loop.run_forever()
 
 
 if __name__ == "__main__":
