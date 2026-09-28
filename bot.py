@@ -759,6 +759,326 @@ async def ema(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ دریافت اطلاعات EMA با خطا مواجه شد."
         )
+# ===================
+# EMA
+# ===================
+async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "لطفاً ارز و تایم‌فریم را وارد کن.\n\n"
+            "مثال:\n"
+            "/analyze BTC 1h"
+        )
+        return
+
+    symbol = context.args[0].upper()
+    timeframe = context.args[1].lower()
+
+    symbols = {
+        "BTC": "BTC-USD",
+        "ETH": "ETH-USD"
+    }
+
+    timeframes = {
+        "1m": 60,
+        "5m": 300,
+        "15m": 900,
+        "1h": 3600,
+        "6h": 21600,
+        "1d": 86400
+    }
+
+    if symbol not in symbols:
+        await update.message.reply_text(
+            "فعلاً فقط BTC و ETH فعال هستند."
+        )
+        return
+
+    if timeframe not in timeframes:
+        await update.message.reply_text(
+            "تایم‌فریم نامعتبر است.\n\n"
+            "مجاز:\n"
+            "1m | 5m | 15m | 1h | 6h | 1d"
+        )
+        return
+
+    product_id = symbols[symbol]
+    granularity = timeframes[timeframe]
+
+    url = (
+        f"https://api.exchange.coinbase.com/"
+        f"products/{product_id}/candles"
+    )
+
+    try:
+
+        async with httpx.AsyncClient(timeout=10) as client:
+
+            response = await client.get(
+                url,
+                params={"granularity": granularity},
+                headers={"Accept": "application/json"}
+            )
+
+            response.raise_for_status()
+            data = response.json()
+
+        if len(data) < 50:
+            await update.message.reply_text(
+                "❌ اطلاعات کافی برای تحلیل دریافت نشد."
+            )
+            return
+
+        data.sort(key=lambda x: x[0])
+
+        closes = [
+            float(candle[4])
+            for candle in data
+        ]
+
+        current_price = closes[-1]
+
+        # =========================
+        # EMA
+        # =========================
+
+        def calculate_ema(values, period):
+
+            multiplier = 2 / (period + 1)
+
+            ema_value = sum(values[:period]) / period
+
+            for price in values[period:]:
+                ema_value = (
+                    (price - ema_value) * multiplier
+                    + ema_value
+                )
+
+            return ema_value
+
+        ema20 = calculate_ema(closes, 20)
+        ema50 = calculate_ema(closes, 50)
+
+        # =========================
+        # RSI
+        # =========================
+
+        gains = []
+        losses = []
+
+        for i in range(1, len(closes)):
+
+            change = closes[i] - closes[i - 1]
+
+            if change > 0:
+                gains.append(change)
+                losses.append(0)
+            else:
+                gains.append(0)
+                losses.append(abs(change))
+
+        period = 14
+
+        avg_gain = sum(gains[:period]) / period
+        avg_loss = sum(losses[:period]) / period
+
+        for i in range(period, len(gains)):
+
+            avg_gain = (
+                (avg_gain * (period - 1))
+                + gains[i]
+            ) / period
+
+            avg_loss = (
+                (avg_loss * (period - 1))
+                + losses[i]
+            ) / period
+
+        if avg_loss == 0:
+            rsi_value = 100
+        else:
+            rs = avg_gain / avg_loss
+            rsi_value = 100 - (
+                100 / (1 + rs)
+            )
+
+        # =========================
+        # MACD
+        # =========================
+
+        ema12_values = []
+
+        multiplier12 = 2 / 13
+
+        ema12 = sum(closes[:12]) / 12
+        ema12_values.append(ema12)
+
+        for price in closes[12:]:
+
+            ema12 = (
+                (price - ema12) * multiplier12
+                + ema12
+            )
+
+            ema12_values.append(ema12)
+
+        ema26_values = []
+
+        multiplier26 = 2 / 27
+
+        ema26 = sum(closes[:26]) / 26
+        ema26_values.append(ema26)
+
+        for price in closes[26:]:
+
+            ema26 = (
+                (price - ema26) * multiplier26
+                + ema26
+            )
+
+            ema26_values.append(ema26)
+
+        ema12_aligned = ema12_values[14:]
+
+        macd_values = []
+
+        for i in range(len(ema26_values)):
+
+            macd_values.append(
+                ema12_aligned[i]
+                - ema26_values[i]
+            )
+
+        signal_period = 9
+        signal_multiplier = 2 / 10
+
+        signal = (
+            sum(macd_values[:signal_period])
+            / signal_period
+        )
+
+        for value in macd_values[signal_period:]:
+
+            signal = (
+                (value - signal)
+                * signal_multiplier
+                + signal
+            )
+
+        macd_value = macd_values[-1]
+        signal_value = signal
+        histogram = macd_value - signal_value
+
+        # =========================
+        # تحلیل RSI
+        # =========================
+
+        if rsi_value >= 70:
+            rsi_status = "🔴 اشباع خرید"
+        elif rsi_value <= 30:
+            rsi_status = "🟢 اشباع فروش"
+        else:
+            rsi_status = "🟡 محدوده میانی"
+
+        # =========================
+        # تحلیل MACD
+        # =========================
+
+        if macd_value > signal_value:
+            macd_status = "🟢 MACD بالاتر از Signal"
+        elif macd_value < signal_value:
+            macd_status = "🔴 MACD پایین‌تر از Signal"
+        else:
+            macd_status = "🟡 MACD و Signal برابر"
+
+        # =========================
+        # تحلیل EMA
+        # =========================
+
+        if ema20 > ema50:
+            ema_status = "🟢 EMA20 بالاتر از EMA50"
+        else:
+            ema_status = "🔴 EMA20 پایین‌تر از EMA50"
+
+        if current_price > ema20:
+            price_status = "🟢 قیمت بالاتر از EMA20"
+        else:
+            price_status = "🔴 قیمت پایین‌تر از EMA20"
+
+        # =========================
+        # جمع‌بندی
+        # =========================
+
+        bullish_points = 0
+        bearish_points = 0
+
+        if rsi_value > 50:
+            bullish_points += 1
+        elif rsi_value < 50:
+            bearish_points += 1
+
+        if macd_value > signal_value:
+            bullish_points += 1
+        elif macd_value < signal_value:
+            bearish_points += 1
+
+        if ema20 > ema50:
+            bullish_points += 1
+        elif ema20 < ema50:
+            bearish_points += 1
+
+        if bullish_points > bearish_points:
+            overall = "🟢 تمایل صعودی"
+        elif bearish_points > bullish_points:
+            overall = "🔴 تمایل نزولی"
+        else:
+            overall = "🟡 وضعیت ترکیبی"
+
+        message = (
+            f"📊 تحلیل ترکیبی بازار\n\n"
+            f"🪙 {symbol}/USD\n"
+            f"⏱ تایم‌فریم: {timeframe}\n\n"
+
+            f"💰 قیمت: ${current_price:,.2f}\n\n"
+
+            f"━━ RSI ━━\n"
+            f"RSI(14): {rsi_value:.2f}\n"
+            f"{rsi_status}\n\n"
+
+            f"━━ MACD ━━\n"
+            f"MACD: {macd_value:.4f}\n"
+            f"Signal: {signal_value:.4f}\n"
+            f"Histogram: {histogram:.4f}\n"
+            f"{macd_status}\n\n"
+
+            f"━━ EMA ━━\n"
+            f"EMA20: ${ema20:,.2f}\n"
+            f"EMA50: ${ema50:,.2f}\n"
+            f"{ema_status}\n"
+            f"{price_status}\n\n"
+
+            f"━━ جمع‌بندی ━━\n"
+            f"🟢 عوامل صعودی: {bullish_points}\n"
+            f"🔴 عوامل نزولی: {bearish_points}\n\n"
+            f"وضعیت کلی: {overall}"
+        )
+
+        await update.message.reply_text(message)
+
+    except Exception as e:
+
+        print(
+            f"Analyze API error: {e}",
+            flush=True
+        )
+
+        await update.message.reply_text(
+            "❌ در تحلیل بازار خطایی رخ داد."
+        )
+# ====================
+# ANALYS
+# ====================
 # =========================
 # HTTP Server
 # =========================
@@ -963,6 +1283,9 @@ async def start_telegram():
     )
     telegram_application.add_handler(
         CommandHandler("ema", ema)
+    )
+    telegram_application.add_handler(
+        CommandHandler("analyze", analyze)
     )
     await telegram_application.initialize()
 
