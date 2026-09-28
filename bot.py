@@ -1281,51 +1281,51 @@ async def cross(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # هم‌تراز کردن EMA20 با EMA50
         ema20_aligned = ema20[30:]
 
-ema_cross = None
-ema_cross_candle = None
+        ema_cross = None
+        ema_cross_candle = None
 
-start_index = max(1, len(ema50) - 5)
+        start_index = max(1, len(ema50) - 5)
 
-for i in range(start_index, len(ema50)):
+        for i in range(start_index, len(ema50)):
 
-    previous_fast = ema20_aligned[i - 1]
-    previous_slow = ema50[i - 1]
+            previous_fast = ema20_aligned[i - 1]
+            previous_slow = ema50[i - 1]
 
-    current_fast = ema20_aligned[i]
-    current_slow = ema50[i]
+            current_fast = ema20_aligned[i]
+            current_slow = ema50[i]
 
-    if (
-        previous_fast <= previous_slow
-        and current_fast > current_slow
-    ):
-        ema_cross = "🟢 کراس صعودی EMA20/EMA50"
-        ema_cross_candle = len(ema50) - i
+            if (
+                previous_fast <= previous_slow
+                and current_fast > current_slow
+            ):
+                ema_cross = "🟢 کراس صعودی EMA20/EMA50"
+                ema_cross_candle = len(ema50) - i
 
-    elif (
-        previous_fast >= previous_slow
-        and current_fast < current_slow
-    ):
-        ema_cross = "🔴 کراس نزولی EMA20/EMA50"
-        ema_cross_candle = len(ema50) - i
+            elif (
+                previous_fast >= previous_slow
+                and current_fast < current_slow
+            ):
+                ema_cross = "🔴 کراس نزولی EMA20/EMA50"
+                ema_cross_candle = len(ema50) - i
 
-if ema_cross is None:
+        if ema_cross is None:
 
-    if ema20_aligned[-1] > ema50[-1]:
-        ema_status = "🟢 EMA20 بالاتر از EMA50 است"
-    else:
-        ema_status = "🔴 EMA20 پایین‌تر از EMA50 است"
+            if ema20_aligned[-1] > ema50[-1]:
+                ema_status = "🟢 EMA20 بالاتر از EMA50 است"
+            else:
+                ema_status = "🔴 EMA20 پایین‌تر از EMA50 است"
 
-    ema_cross = (
-        f"⚪ در ۵ کندل اخیر کراس جدیدی مشاهده نشد\n"
-        f"{ema_status}"
-    )
+            ema_cross = (
+                f"⚪ در ۵ کندل اخیر کراس جدیدی مشاهده نشد\n"
+                f"{ema_status}"
+            )
 
-else:
+        else:
 
-    ema_cross = (
-        f"{ema_cross}\n"
-        f"⏱ حدود {ema_cross_candle} کندل قبل"
-    )
+            ema_cross = (
+                f"{ema_cross}\n"
+                f"⏱ حدود {ema_cross_candle} کندل قبل"
+            )
 
         # =========================
         # MACD
@@ -1393,11 +1393,10 @@ for i in range(start_index, len(signal_values)):
             )
 
         else:
-
             macd_cross = (
                 f"{macd_cross}\n"
                 f"⏱ حدود {macd_cross_candle} کندل قبل"
-    )
+            )
 
         message = (
             f"🔄 بررسی کراس‌ها\n\n"
