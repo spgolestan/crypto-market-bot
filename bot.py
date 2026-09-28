@@ -623,6 +623,142 @@ async def macd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ دریافت اطلاعات MACD با خطا مواجه شد."
         )
+# ===============
+# MACD
+# ===============
+async def ema(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "لطفاً ارز و تایم‌فریم را وارد کن.\n\n"
+            "مثال:\n"
+            "/ema BTC 1h"
+        )
+        return
+
+    symbol = context.args[0].upper()
+    timeframe = context.args[1].lower()
+
+    symbols = {
+        "BTC": "BTC-USD",
+        "ETH": "ETH-USD"
+    }
+
+    timeframes = {
+        "1m": 60,
+        "5m": 300,
+        "15m": 900,
+        "1h": 3600,
+        "6h": 21600,
+        "1d": 86400
+    }
+
+    if symbol not in symbols:
+        await update.message.reply_text(
+            "فعلاً فقط BTC و ETH فعال هستند."
+        )
+        return
+
+    if timeframe not in timeframes:
+        await update.message.reply_text(
+            "تایم‌فریم نامعتبر است.\n\n"
+            "تایم‌فریم‌های مجاز:\n"
+            "1m\n"
+            "5m\n"
+            "15m\n"
+            "1h\n"
+            "6h\n"
+            "1d"
+        )
+        return
+
+    product_id = symbols[symbol]
+    granularity = timeframes[timeframe]
+
+    url = (
+        f"https://api.exchange.coinbase.com/"
+        f"products/{product_id}/candles"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+
+            response = await client.get(
+                url,
+                params={"granularity": granularity},
+                headers={"Accept": "application/json"}
+            )
+
+            response.raise_for_status()
+            data = response.json()
+
+        if len(data) < 50:
+            await update.message.reply_text(
+                "❌ اطلاعات کافی برای محاسبه EMA دریافت نشد."
+            )
+            return
+
+        # قدیمی به جدید
+        data.sort(key=lambda x: x[0])
+
+        closes = [float(candle[4]) for candle in data]
+
+        def calculate_ema(values, period):
+
+            multiplier = 2 / (period + 1)
+
+            ema_value = sum(values[:period]) / period
+
+            for price in values[period:]:
+                ema_value = (
+                    (price - ema_value) * multiplier
+                    + ema_value
+                )
+
+            return ema_value
+
+        ema20 = calculate_ema(closes, 20)
+        ema50 = calculate_ema(closes, 50)
+
+        current_price = closes[-1]
+
+        if ema20 > ema50:
+            trend = "🟢 روند کوتاه‌مدت بالاتر از میان‌مدت"
+        elif ema20 < ema50:
+            trend = "🔴 روند کوتاه‌مدت پایین‌تر از میان‌مدت"
+        else:
+            trend = "🟡 EMA20 و EMA50 برابر هستند"
+
+        if current_price > ema20 and current_price > ema50:
+            position = "🟢 قیمت بالاتر از هر دو EMA قرار دارد"
+        elif current_price < ema20 and current_price < ema50:
+            position = "🔴 قیمت پایین‌تر از هر دو EMA قرار دارد"
+        else:
+            position = "🟡 قیمت بین EMA20 و EMA50 قرار دارد"
+
+        message = (
+            f"📊 EMA Analysis\n\n"
+            f"🪙 {symbol}/USD\n"
+            f"⏱ تایم‌فریم: {timeframe}\n\n"
+            f"💰 قیمت فعلی: ${current_price:,.2f}\n\n"
+            f"EMA 20: ${ema20:,.2f}\n"
+            f"EMA 50: ${ema50:,.2f}\n\n"
+            f"روند: {trend}\n"
+            f"موقعیت قیمت: {position}"
+        )
+
+        await update.message.reply_text(message)
+
+    except Exception as e:
+
+        print(
+            f"EMA API error: {e}",
+            flush=True
+        )
+
+        await update.message.reply_text(
+            "❌ دریافت اطلاعات EMA با خطا مواجه شد."
+        )
 # =========================
 # HTTP Server
 # =========================
@@ -825,7 +961,9 @@ async def start_telegram():
     telegram_application.add_handler(
         CommandHandler("macd", macd)
     )
-
+    telegram_application.add_handler(
+        CommandHandler("ema", ema)
+    )
     await telegram_application.initialize()
 
     await telegram_application.start()
