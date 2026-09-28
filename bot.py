@@ -858,7 +858,7 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ema_value    
 
 
-                def calculate_ema_series(values, period):
+         def calculate_ema_series(values, period):
 
             multiplier = 2 / (period + 1)
 
