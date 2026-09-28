@@ -8,34 +8,31 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 
 # =========================
-# Telegram
+# Telegram Commands
 # =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "سلام 👋\n"
         "ربات تحلیل بازار فعال است.\n\n"
-        "برای دریافت قیمت:\n"
-        "/price BTC"
+        "دریافت قیمت:\n"
+        "/price BTC\n"
+        "/price ETH"
     )
 
-
-# =========================
-# Price
-# =========================
 
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
         await update.message.reply_text(
-            "نمونه استفاده:\n"
+            "لطفاً نام ارز را وارد کن.\n\n"
+            "مثال:\n"
             "/price BTC"
         )
         return
 
     symbol = context.args[0].upper()
 
-    # فعلاً فقط BTC و ETH را برای تست می‌پذیریم
     symbols = {
         "BTC": "bitcoin",
         "ETH": "ethereum"
@@ -43,8 +40,7 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if symbol not in symbols:
         await update.message.reply_text(
-            "فعلاً این ارز برای تست پشتیبانی نمی‌شود.\n\n"
-            "نمونه:\n"
+            "فعلاً فقط این ارزها برای تست فعال هستند:\n\n"
             "/price BTC\n"
             "/price ETH"
         )
@@ -61,6 +57,7 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     try:
+
         async with httpx.AsyncClient(timeout=10) as client:
 
             response = await client.get(
@@ -75,7 +72,11 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         coin_data = data[coin_id]
 
         price_value = coin_data["usd"]
-        change_24h = coin_data.get("usd_24h_change", 0)
+
+        change_24h = coin_data.get(
+            "usd_24h_change",
+            0
+        )
 
         message = (
             f"📊 {symbol}/USDT\n\n"
@@ -87,16 +88,18 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
 
-        print(f"Price API error: {e}")
+        print(
+            f"Price API error: {e}",
+            flush=True
+        )
 
         await update.message.reply_text(
-            "❌ دریافت اطلاعات بازار با خطا مواجه شد.\n"
-            "لطفاً چند لحظه بعد دوباره امتحان کن."
+            "❌ دریافت اطلاعات بازار با خطا مواجه شد."
         )
 
 
 # =========================
-# Render Web Server
+# Render HTTP Server
 # =========================
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -123,7 +126,12 @@ class HealthHandler(BaseHTTPRequestHandler):
 def start_web_server():
 
     port = int(
-        os.environ.get("PORT", 10000)
+        os.environ.get("PORT", "10000")
+    )
+
+    print(
+        f"Starting HTTP server on port {port}...",
+        flush=True
     )
 
     server = HTTPServer(
@@ -132,36 +140,35 @@ def start_web_server():
     )
 
     print(
-        f"Web server running on port {port}"
+        f"HTTP server is listening on port {port}",
+        flush=True
     )
 
     server.serve_forever()
 
 
 # =========================
-# Main
+# Telegram Server
 # =========================
 
-def main():
+def start_telegram_bot():
 
     token = os.environ.get(
         "TELEGRAM_BOT_TOKEN"
     )
 
     if not token:
-        raise ValueError(
-            "TELEGRAM_BOT_TOKEN environment variable is not set."
+        print(
+            "ERROR: TELEGRAM_BOT_TOKEN is not set!",
+            flush=True
         )
+        return
 
-    # Render HTTP server
-    web_thread = threading.Thread(
-        target=start_web_server,
-        daemon=True
+    print(
+        "Starting Telegram bot...",
+        flush=True
     )
 
-    web_thread.start()
-
-    # Telegram application
     app = (
         Application
         .builder()
@@ -183,9 +190,33 @@ def main():
         )
     )
 
-    print("Telegram bot is running...")
+    print(
+        "Telegram bot is running...",
+        flush=True
+    )
 
-    app.run_polling()
+    app.run_polling(
+        stop_signals=None
+    )
+
+
+# =========================
+# Main
+# =========================
+
+def main():
+
+    # اول Telegram را در Thread جدا اجرا می‌کنیم
+    telegram_thread = threading.Thread(
+        target=start_telegram_bot,
+        daemon=True
+    )
+
+    telegram_thread.start()
+
+    # HTTP Server در Thread اصلی اجرا می‌شود
+    # بنابراین Render سریعاً پورت را می‌بیند.
+    start_web_server()
 
 
 if __name__ == "__main__":
