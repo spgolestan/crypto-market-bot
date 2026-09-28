@@ -1179,6 +1179,7 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====================
 # ANALYS
 # ====================
+```python
 async def cross(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(context.args) < 2:
@@ -1255,7 +1256,7 @@ async def cross(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
 
         # =========================
-        # EMA
+        # تابع محاسبه EMA
         # =========================
 
         def calculate_ema_series(values, period):
@@ -1267,16 +1268,29 @@ async def cross(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result = [ema]
 
             for price in values[period:]:
+
                 ema = (
                     (price - ema) * multiplier
                     + ema
                 )
+
                 result.append(ema)
 
             return result
 
-        ema20 = calculate_ema_series(closes, 20)
-        ema50 = calculate_ema_series(closes, 50)
+        # =========================
+        # EMA20 / EMA50
+        # =========================
+
+        ema20 = calculate_ema_series(
+            closes,
+            20
+        )
+
+        ema50 = calculate_ema_series(
+            closes,
+            50
+        )
 
         # هم‌تراز کردن EMA20 با EMA50
         ema20_aligned = ema20[30:]
@@ -1284,9 +1298,16 @@ async def cross(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ema_cross = None
         ema_cross_candle = None
 
-        start_index = max(1, len(ema50) - 5)
+        # فقط 5 کندل اخیر
+        start_index = max(
+            1,
+            len(ema50) - 5
+        )
 
-        for i in range(start_index, len(ema50)):
+        for i in range(
+            start_index,
+            len(ema50)
+        ):
 
             previous_fast = ema20_aligned[i - 1]
             previous_slow = ema50[i - 1]
@@ -1298,22 +1319,41 @@ async def cross(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 previous_fast <= previous_slow
                 and current_fast > current_slow
             ):
-                ema_cross = "🟢 کراس صعودی EMA20/EMA50"
-                ema_cross_candle = len(ema50) - i
+
+                ema_cross = (
+                    "🟢 کراس صعودی EMA20/EMA50"
+                )
+
+                ema_cross_candle = (
+                    len(ema50) - i
+                )
 
             elif (
                 previous_fast >= previous_slow
                 and current_fast < current_slow
             ):
-                ema_cross = "🔴 کراس نزولی EMA20/EMA50"
-                ema_cross_candle = len(ema50) - i
+
+                ema_cross = (
+                    "🔴 کراس نزولی EMA20/EMA50"
+                )
+
+                ema_cross_candle = (
+                    len(ema50) - i
+                )
 
         if ema_cross is None:
 
             if ema20_aligned[-1] > ema50[-1]:
-                ema_status = "🟢 EMA20 بالاتر از EMA50 است"
+
+                ema_status = (
+                    "🟢 EMA20 بالاتر از EMA50 است"
+                )
+
             else:
-                ema_status = "🔴 EMA20 پایین‌تر از EMA50 است"
+
+                ema_status = (
+                    "🔴 EMA20 پایین‌تر از EMA50 است"
+                )
 
             ema_cross = (
                 f"⚪ در ۵ کندل اخیر کراس جدیدی مشاهده نشد\n"
@@ -1331,9 +1371,17 @@ async def cross(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # MACD
         # =========================
 
-        ema12 = calculate_ema_series(closes, 12)
-        ema26 = calculate_ema_series(closes, 26)
+        ema12 = calculate_ema_series(
+            closes,
+            12
+        )
 
+        ema26 = calculate_ema_series(
+            closes,
+            26
+        )
+
+        # هم‌تراز کردن EMA12 با EMA26
         ema12_aligned = ema12[14:]
 
         macd_values = []
@@ -1345,6 +1393,7 @@ async def cross(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 - ema26[i]
             )
 
+        # Signal = EMA9 روی MACD
         signal_values = calculate_ema_series(
             macd_values,
             9
@@ -1353,39 +1402,65 @@ async def cross(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # هم‌تراز کردن MACD با Signal
         macd_aligned = macd_values[8:]
 
-macd_cross = None
-macd_cross_candle = None
+        macd_cross = None
+        macd_cross_candle = None
 
-start_index = max(1, len(signal_values) - 5)
+        # فقط 5 کندل اخیر
+        start_index = max(
+            1,
+            len(signal_values) - 5
+        )
 
-for i in range(start_index, len(signal_values)):
+        for i in range(
+            start_index,
+            len(signal_values)
+        ):
 
-    previous_macd = macd_aligned[i - 1]
-    previous_signal = signal_values[i - 1]
+            previous_macd = macd_aligned[i - 1]
+            previous_signal = signal_values[i - 1]
 
-    current_macd = macd_aligned[i]
-    current_signal = signal_values[i]
+            current_macd = macd_aligned[i]
+            current_signal = signal_values[i]
 
-    if (
-        previous_macd <= previous_signal
-        and current_macd > current_signal
-    ):
-        macd_cross = "🟢 کراس صعودی MACD"
-        macd_cross_candle = len(signal_values) - i
+            if (
+                previous_macd <= previous_signal
+                and current_macd > current_signal
+            ):
 
-    elif (
-        previous_macd >= previous_signal
-        and current_macd < current_signal
-    ):
-        macd_cross = "🔴 کراس نزولی MACD"
-        macd_cross_candle = len(signal_values) - i
+                macd_cross = (
+                    "🟢 کراس صعودی MACD"
+                )
+
+                macd_cross_candle = (
+                    len(signal_values) - i
+                )
+
+            elif (
+                previous_macd >= previous_signal
+                and current_macd < current_signal
+            ):
+
+                macd_cross = (
+                    "🔴 کراس نزولی MACD"
+                )
+
+                macd_cross_candle = (
+                    len(signal_values) - i
+                )
 
         if macd_cross is None:
 
             if macd_aligned[-1] > signal_values[-1]:
-                macd_status = "🟢 MACD بالاتر از Signal است"
+
+                macd_status = (
+                    "🟢 MACD بالاتر از Signal است"
+                )
+
             else:
-                macd_status = "🔴 MACD پایین‌تر از Signal است"
+
+                macd_status = (
+                    "🔴 MACD پایین‌تر از Signal است"
+                )
 
             macd_cross = (
                 f"⚪ در ۵ کندل اخیر کراس جدیدی مشاهده نشد\n"
@@ -1393,10 +1468,15 @@ for i in range(start_index, len(signal_values)):
             )
 
         else:
+
             macd_cross = (
                 f"{macd_cross}\n"
                 f"⏱ حدود {macd_cross_candle} کندل قبل"
             )
+
+        # =========================
+        # پیام نهایی
+        # =========================
 
         message = (
             f"🔄 بررسی کراس‌ها\n\n"
@@ -1410,7 +1490,9 @@ for i in range(start_index, len(signal_values)):
             f"{macd_cross}"
         )
 
-        await update.message.reply_text(message)
+        await update.message.reply_text(
+            message
+        )
 
     except Exception as e:
 
@@ -1422,6 +1504,7 @@ for i in range(start_index, len(signal_values)):
         await update.message.reply_text(
             "❌ در بررسی کراس‌ها خطایی رخ داد."
         )
+```
 # ==========================
 # CROSS
 # =========================
