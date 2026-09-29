@@ -1,7 +1,7 @@
+```python
 import os
 import asyncio
 import threading
-import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
@@ -9,1536 +9,1413 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 
-# =========================
-# Settings
-# =========================
+# ============================================================
+# CONFIG
+# ============================================================
 
 RENDER_URL = "https://crypto-market-bot-ozg7.onrender.com"
-
 WEBHOOK_PATH = "/telegram-webhook"
-
 WEBHOOK_URL = RENDER_URL + WEBHOOK_PATH
 
+COINBASE_API = "https://api.exchange.coinbase.com"
 
-# =========================
-# Global objects
-# =========================
+SUPPORTED_SYMBOLS = {
+    "BTC": "BTC-USD",
+    "ETH": "ETH-USD",
+}
+
+SUPPORTED_TIMEFRAMES = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3600,
+    "6h": 21600,
+    "1d": 86400,
+}
+
+
+# ============================================================
+# GLOBALS
+# ============================================================
 
 telegram_application = None
 event_loop = None
 
 
-# =========================
-# Telegram Commands
-# =========================
+# ============================================================
+# MARKET DATA ENGINE
+# ============================================================
+
+async def fetch_json(url, params=None):
+    """
+    Generic Coinbase GET request.
+    """
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.get(
+            url,
+            params=params,
+            headers={
+                "User-Agent": "crypto-market-bot/1.0"
+            },
+        )
+
+        response.raise_for_status()
+        return response.json()
+
+
+async def fetch_candles(product_id, granularity):
+    """
+    Fetch candles from Coinbase and return them sorted
+    from oldest -> newest.
+
+    Coinbase candle format:
+    [time, low, high, open, close, volume]
+    """
+
+    url = f"{COINBASE_API}/products/{product_id}/candles"
+
+    data = await fetch_json(
+        url,
+        params={
+            "granularity": granularity
+        },
+    )
+
+    if not isinstance(data, list):
+        raise ValueError("Invalid candle data received from Coinbase.")
+
+    candles = []
+
+    for candle in data:
+        if len(candle) < 6:
+            continue
+
+        candles.append({
+            "time": int(candle[0]),
+            "low": float(candle[1]),
+            "high": float(candle[2]),
+            "open": float(candle[3]),
+            "close": float(candle[4]),
+            "volume": float(candle[5]),
+        })
+
+    candles.sort(key=lambda x: x["time"])
+
+    return candles
+
+
+async def fetch_ticker(product_id):
+    """
+    Fetch current ticker.
+    """
+    url = f"{COINBASE_API}/products/{product_id}/ticker"
+    return await fetch_json(url)
+
+
+async def fetch_stats(product_id):
+    """
+    Fetch 24h statistics.
+    """
+    url = f"{COINBASE_API}/products/{product_id}/stats"
+    return await fetch_json(url)
+
+
+# ============================================================
+# BASIC HELPERS
+# ============================================================
+
+def get_product_id(symbol):
+    return SUPPORTED_SYMBOLS.get(symbol.upper())
+
+
+def get_granularity(timeframe):
+    return SUPPORTED_TIMEFRAMES.get(timeframe.lower())
+
+
+def format_price(value):
+    if value >= 1000:
+        return f"${value:,.2f}"
+
+    if value >= 1:
+        return f"${value:,.4f}"
+
+    return f"${value:,.6f}"
+
+
+def format_percent(value):
+    sign = "+" if value > 0 else ""
+    return f"{sign}{value:.2f}%"
+
+
+def timeframe_label(timeframe):
+    labels = {
+        "1m": "1 دقیقه",
+        "5m": "5 دقیقه",
+        "15m": "15 دقیقه",
+        "1h": "1 ساعت",
+        "6h": "6 ساعت",
+        "1d": "1 روز",
+    }
+
+    return labels.get(timeframe, timeframe)
+
+
+# ============================================================
+# INDICATOR ENGINE
+# ============================================================
+
+def calculate_ema_series(values, period):
+    """
+    EMA series with the same length as input.
+
+    Values before enough data exists are None.
+
+    At index period-1:
+        SMA is used as the first EMA value.
+
+    After that:
+        EMA = price * multiplier + previous_ema * (1 - multiplier)
+    """
+
+    if len(values) < period:
+        return [None] * len(values)
+
+    result = [None] * len(values)
+
+    sma = sum(values[:period]) / period
+    result[period - 1] = sma
+
+    multiplier = 2 / (period + 1)
+
+    previous_ema = sma
+
+    for i in range(period, len(values)):
+        current_value = values[i]
+
+        current_ema = (
+            current_value * multiplier
+            + previous_ema * (1 - multiplier)
+        )
+
+        result[i] = current_ema
+        previous_ema = current_ema
+
+    return result
+
+
+def calculate_ema(values, period):
+    """
+    Return only the latest EMA value.
+    """
+
+    series = calculate_ema_series(values, period)
+
+    if not series:
+        return None
+
+    return series[-1]
+
+
+def calculate_rsi(values, period=14):
+    """
+    Wilder-style RSI.
+
+    Returns the latest RSI value.
+    """
+
+    if len(values) < period + 1:
+        return None
+
+    gains = []
+    losses = []
+
+    for i in range(1, len(values)):
+        change = values[i] - values[i - 1]
+
+        if change > 0:
+            gains.append(change)
+            losses.append(0)
+        else:
+            gains.append(0)
+            losses.append(abs(change))
+
+    average_gain = sum(gains[:period]) / period
+    average_loss = sum(losses[:period]) / period
+
+    if average_loss == 0:
+        rsi = 100.0
+    else:
+        rs = average_gain / average_loss
+        rsi = 100 - (100 / (1 + rs))
+
+    for i in range(period, len(gains)):
+        average_gain = (
+            (average_gain * (period - 1))
+            + gains[i]
+        ) / period
+
+        average_loss = (
+            (average_loss * (period - 1))
+            + losses[i]
+        ) / period
+
+        if average_loss == 0:
+            rsi = 100.0
+        else:
+            rs = average_gain / average_loss
+            rsi = 100 - (100 / (1 + rs))
+
+    return rsi
+
+
+def calculate_macd(
+    closes,
+    fast_period=12,
+    slow_period=26,
+    signal_period=9,
+):
+    """
+    Calculate MACD, Signal and Histogram.
+
+    All returned series have the same length as closes.
+
+    This makes cross detection much easier because
+    everything keeps the original candle index.
+    """
+
+    ema_fast = calculate_ema_series(
+        closes,
+        fast_period
+    )
+
+    ema_slow = calculate_ema_series(
+        closes,
+        slow_period
+    )
+
+    macd_series = [None] * len(closes)
+
+    for i in range(len(closes)):
+        if (
+            ema_fast[i] is not None
+            and ema_slow[i] is not None
+        ):
+            macd_series[i] = (
+                ema_fast[i] - ema_slow[i]
+            )
+
+    # Signal EMA can only start once enough MACD values exist.
+    valid_macd = [
+        value
+        for value in macd_series
+        if value is not None
+    ]
+
+    signal_valid = calculate_ema_series(
+        valid_macd,
+        signal_period
+    )
+
+    signal_series = [None] * len(closes)
+
+    valid_index = 0
+
+    for i in range(len(closes)):
+        if macd_series[i] is not None:
+
+            if signal_valid[valid_index] is not None:
+                signal_series[i] = signal_valid[valid_index]
+
+            valid_index += 1
+
+    histogram_series = [None] * len(closes)
+
+    for i in range(len(closes)):
+        if (
+            macd_series[i] is not None
+            and signal_series[i] is not None
+        ):
+            histogram_series[i] = (
+                macd_series[i] - signal_series[i]
+            )
+
+    return {
+        "macd": macd_series,
+        "signal": signal_series,
+        "histogram": histogram_series,
+    }
+
+
+# ============================================================
+# CROSS DETECTION ENGINE
+# ============================================================
+
+def detect_cross(
+    fast_series,
+    slow_series,
+    lookback=5,
+):
+    """
+    Detect the most recent bullish/bearish cross
+    inside the requested lookback window.
+
+    Returns:
+
+    {
+        "detected": True,
+        "direction": "BULLISH",
+        "bars_ago": 2
+    }
+
+    or
+
+    {
+        "detected": False,
+        "direction": None,
+        "bars_ago": None
+    }
+    """
+
+    if len(fast_series) != len(slow_series):
+        raise ValueError(
+            "Fast and slow series must have the same length."
+        )
+
+    latest_index = len(fast_series) - 1
+
+    start_index = max(
+        1,
+        latest_index - lookback + 1
+    )
+
+    latest_cross = None
+
+    for i in range(start_index, latest_index + 1):
+
+        previous_fast = fast_series[i - 1]
+        previous_slow = slow_series[i - 1]
+
+        current_fast = fast_series[i]
+        current_slow = slow_series[i]
+
+        if (
+            previous_fast is None
+            or previous_slow is None
+            or current_fast is None
+            or current_slow is None
+        ):
+            continue
+
+        # Bullish Cross
+        if (
+            previous_fast <= previous_slow
+            and current_fast > current_slow
+        ):
+            latest_cross = {
+                "detected": True,
+                "direction": "BULLISH",
+                "bars_ago": latest_index - i,
+            }
+
+        # Bearish Cross
+        elif (
+            previous_fast >= previous_slow
+            and current_fast < current_slow
+        ):
+            latest_cross = {
+                "detected": True,
+                "direction": "BEARISH",
+                "bars_ago": latest_index - i,
+            }
+
+    if latest_cross:
+        return latest_cross
+
+    return {
+        "detected": False,
+        "direction": None,
+        "bars_ago": None,
+    }
+
+
+def get_current_relation(
+    fast_value,
+    slow_value,
+):
+    if fast_value is None or slow_value is None:
+        return "UNKNOWN"
+
+    if fast_value > slow_value:
+        return "BULLISH"
+
+    if fast_value < slow_value:
+        return "BEARISH"
+
+    return "NEUTRAL"
+
+
+# ============================================================
+# MARKET ANALYSIS ENGINE
+# ============================================================
+
+def analyze_market(
+    candles,
+    symbol,
+    timeframe,
+):
+    """
+    Main analysis engine.
+
+    This function does NOT send Telegram messages.
+    It only calculates and returns structured data.
+    """
+
+    if not candles:
+        raise ValueError("No candle data available.")
+
+    closes = [
+        candle["close"]
+        for candle in candles
+    ]
+
+    current_price = closes[-1]
+
+    # --------------------------------------------------------
+    # RSI
+    # --------------------------------------------------------
+
+    rsi_value = calculate_rsi(
+        closes,
+        period=14
+    )
+
+    if rsi_value is None:
+        rsi_zone = "UNKNOWN"
+    elif rsi_value >= 70:
+        rsi_zone = "OVERBOUGHT"
+    elif rsi_value <= 30:
+        rsi_zone = "OVERSOLD"
+    else:
+        rsi_zone = "NEUTRAL"
+
+    # --------------------------------------------------------
+    # EMA
+    # --------------------------------------------------------
+
+    ema20_series = calculate_ema_series(
+        closes,
+        20
+    )
+
+    ema50_series = calculate_ema_series(
+        closes,
+        50
+    )
+
+    ema20 = ema20_series[-1]
+    ema50 = ema50_series[-1]
+
+    ema_relation = get_current_relation(
+        ema20,
+        ema50
+    )
+
+    if (
+        ema20 is not None
+        and ema50 is not None
+    ):
+        if ema20 > ema50:
+            ema_trend = "BULLISH"
+        elif ema20 < ema50:
+            ema_trend = "BEARISH"
+        else:
+            ema_trend = "NEUTRAL"
+    else:
+        ema_trend = "UNKNOWN"
+
+    # Price relative to EMA20
+    if ema20 is None:
+        price_vs_ema20 = "UNKNOWN"
+    elif current_price > ema20:
+        price_vs_ema20 = "ABOVE"
+    elif current_price < ema20:
+        price_vs_ema20 = "BELOW"
+    else:
+        price_vs_ema20 = "EQUAL"
+
+    # --------------------------------------------------------
+    # EMA CROSS
+    # --------------------------------------------------------
+
+    ema_cross = detect_cross(
+        ema20_series,
+        ema50_series,
+        lookback=5
+    )
+
+    # --------------------------------------------------------
+    # MACD
+    # --------------------------------------------------------
+
+    macd_data = calculate_macd(closes)
+
+    macd_series = macd_data["macd"]
+    signal_series = macd_data["signal"]
+    histogram_series = macd_data["histogram"]
+
+    macd_value = macd_series[-1]
+    signal_value = signal_series[-1]
+    histogram_value = histogram_series[-1]
+
+    macd_relation = get_current_relation(
+        macd_value,
+        signal_value
+    )
+
+    macd_cross = detect_cross(
+        macd_series,
+        signal_series,
+        lookback=5
+    )
+
+    # --------------------------------------------------------
+    # Confluence
+    # --------------------------------------------------------
+
+    bullish_points = 0
+    bearish_points = 0
+
+    # RSI
+    if rsi_value is not None:
+        if rsi_value > 50:
+            bullish_points += 1
+        elif rsi_value < 50:
+            bearish_points += 1
+
+    # MACD
+    if (
+        macd_value is not None
+        and signal_value is not None
+    ):
+        if macd_value > signal_value:
+            bullish_points += 1
+        elif macd_value < signal_value:
+            bearish_points += 1
+
+    # EMA
+    if (
+        ema20 is not None
+        and ema50 is not None
+    ):
+        if ema20 > ema50:
+            bullish_points += 1
+        elif ema20 < ema50:
+            bearish_points += 1
+
+    if bullish_points > bearish_points:
+        overall = "BULLISH_BIAS"
+    elif bearish_points > bullish_points:
+        overall = "BEARISH_BIAS"
+    else:
+        overall = "MIXED"
+
+    # --------------------------------------------------------
+    # Return structured result
+    # --------------------------------------------------------
+
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+
+        "price": current_price,
+
+        "rsi": {
+            "value": rsi_value,
+            "zone": rsi_zone,
+        },
+
+        "ema": {
+            "ema20": ema20,
+            "ema50": ema50,
+            "trend": ema_trend,
+            "relation": ema_relation,
+            "price_vs_ema20": price_vs_ema20,
+        },
+
+        "macd": {
+            "value": macd_value,
+            "signal": signal_value,
+            "histogram": histogram_value,
+            "relation": macd_relation,
+        },
+
+        "cross": {
+            "ema": ema_cross,
+            "macd": macd_cross,
+        },
+
+        "confluence": {
+            "bullish_points": bullish_points,
+            "bearish_points": bearish_points,
+            "overall": overall,
+        },
+    }
+
+
+# ============================================================
+# TELEGRAM COMMANDS
+# ============================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
-        "سلام 👋\n"
-        "ربات تحلیل بازار فعال است.\n\n"
-        "دریافت قیمت:\n"
+        "🤖 Crypto Market Bot فعال است.\n\n"
+        "دستورات:\n"
         "/price BTC\n"
-        "/price ETH"
+        "/price ETH\n"
+        "/candles BTC 1h\n"
+        "/rsi BTC 1h\n"
+        "/ema BTC 1h\n"
+        "/macd BTC 1h\n"
+        "/cross BTC 1h\n"
+        "/analyze BTC 1h"
     )
 
+
+# ============================================================
+# /price
+# ============================================================
 
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
         await update.message.reply_text(
-            "لطفاً نام ارز را وارد کن.\n\n"
-            "مثال:\n"
-            "/price BTC"
+            "مثال:\n/price BTC"
         )
         return
 
     symbol = context.args[0].upper()
+    product_id = get_product_id(symbol)
 
-    symbols = {
-        "BTC": "BTC-USD",
-        "ETH": "ETH-USD"
-    }
-
-    if symbol not in symbols:
+    if not product_id:
         await update.message.reply_text(
-            "فعلاً فقط این ارزها برای تست فعال هستند:\n\n"
-            "/price BTC\n"
-            "/price ETH"
+            "❌ فقط BTC و ETH پشتیبانی می‌شوند."
         )
         return
 
-    product_id = symbols[symbol]
-
-    url = (
-        f"https://api.exchange.coinbase.com/"
-        f"products/{product_id}/ticker"
-    )
-
-    stats_url = (
-        f"https://api.exchange.coinbase.com/"
-        f"products/{product_id}/stats"
-    )
-
     try:
+        ticker = await fetch_ticker(product_id)
+        stats = await fetch_stats(product_id)
 
-        async with httpx.AsyncClient(timeout=10) as client:
+        current_price = float(ticker["price"])
+        high_24h = float(stats["high"])
+        low_24h = float(stats["low"])
+        open_24h = float(stats["open"])
 
-            ticker_response = await client.get(
-                url,
-                headers={
-                    "Accept": "application/json"
-                }
-            )
-
-            ticker_response.raise_for_status()
-
-            ticker_data = ticker_response.json()
-
-            stats_response = await client.get(
-                stats_url,
-                headers={
-                    "Accept": "application/json"
-                }
-            )
-
-            stats_response.raise_for_status()
-
-            stats_data = stats_response.json()
-
-        price_value = float(
-            ticker_data["price"]
-        )
-
-        open_24h = float(
-            stats_data["open"]
-        )
-
-        high_24h = float(
-            stats_data["high"]
-        )
-
-        low_24h = float(
-            stats_data["low"]
-        )
-
-        change_24h = (
-            (price_value - open_24h)
-            / open_24h
-            * 100
-        )
-
-        if change_24h >= 0:
-            change_icon = "📈"
+        if open_24h != 0:
+            change_24h = (
+                (current_price - open_24h)
+                / open_24h
+            ) * 100
         else:
-            change_icon = "📉"
+            change_24h = 0
 
         message = (
-            f"📊 {symbol}/USD\n\n"
-            f"💰 قیمت: ${price_value:,.2f}\n"
-            f"{change_icon} تغییر ۲۴ ساعت: {change_24h:+.2f}%\n\n"
-            f"🔺 سقف ۲۴ ساعت: ${high_24h:,.2f}\n"
-            f"🔻 کف ۲۴ ساعت: ${low_24h:,.2f}"
+            f"📊 {symbol} Market\n\n"
+            f"💰 Price: {format_price(current_price)}\n"
+            f"📈 24h High: {format_price(high_24h)}\n"
+            f"📉 24h Low: {format_price(low_24h)}\n"
+            f"📊 24h Change: {format_percent(change_24h)}"
         )
 
-        await update.message.reply_text(
-            message
-        )
+        await update.message.reply_text(message)
 
     except Exception as e:
-
-        print(
-            f"Price API error: {e}",
-            flush=True
-        )
+        print("PRICE ERROR:", e)
 
         await update.message.reply_text(
-            "❌ دریافت اطلاعات بازار با خطا مواجه شد."
+            "❌ خطا در دریافت اطلاعات قیمت."
         )
-# ==========
-async def candles(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+
+# ============================================================
+# /candles
+# ============================================================
+
+async def candles(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if len(context.args) < 2:
         await update.message.reply_text(
-            "فرمت دستور:\n\n"
-            "/candles BTC 1h\n\n"
-            "مثال:\n"
-            "/candles BTC 1h"
+            "مثال:\n/candles BTC 1h"
         )
         return
 
     symbol = context.args[0].upper()
     timeframe = context.args[1].lower()
 
-    symbols = {
-        "BTC": "BTC-USD",
-        "ETH": "ETH-USD"
-    }
+    product_id = get_product_id(symbol)
+    granularity = get_granularity(timeframe)
 
-    if symbol not in symbols:
+    if not product_id:
         await update.message.reply_text(
-            "فعلاً فقط BTC و ETH فعال هستند."
+            "❌ فقط BTC و ETH پشتیبانی می‌شوند."
         )
         return
 
-    timeframes = {
-        "1m": 60,
-        "5m": 300,
-        "15m": 900,
-        "1h": 3600,
-        "6h": 21600,
-        "1d": 86400
-    }
-
-    if timeframe not in timeframes:
+    if not granularity:
         await update.message.reply_text(
-            "تایم‌فریم‌های قابل استفاده:\n\n"
-            "1m\n"
-            "5m\n"
-            "15m\n"
-            "1h\n"
-            "6h\n"
-            "1d"
+            "❌ تایم‌فریم نامعتبر است.\n"
+            "مقادیر مجاز: 1m, 5m, 15m, 1h, 6h, 1d"
         )
         return
-
-    product_id = symbols[symbol]
-
-    url = (
-        f"https://api.exchange.coinbase.com/"
-        f"products/{product_id}/candles"
-    )
-
-    params = {
-        "granularity": timeframes[timeframe]
-    }
 
     try:
+        data = await fetch_candles(
+            product_id,
+            granularity
+        )
 
-        async with httpx.AsyncClient(timeout=10) as client:
-
-            response = await client.get(
-                url,
-                params=params,
-                headers={
-                    "Accept": "application/json"
-                }
-            )
-
-            response.raise_for_status()
-
-            data = response.json()
-
-        if not data:
+        if len(data) < 5:
             await update.message.reply_text(
-                "❌ اطلاعات کندلی دریافت نشد."
+                "❌ کندل کافی دریافت نشد."
             )
             return
 
-        # Coinbase کندل‌ها را به صورت:
-        # [time, low, high, open, close, volume]
-        # برمی‌گرداند.
+        latest = data[-5:]
 
-        candles_data = data[:5]
+        lines = [
+            f"🕯 {symbol} — {timeframe}",
+            ""
+        ]
 
-        message = (
-            f"🕯 {symbol}/USD\n"
-            f"⏱ تایم‌فریم: {timeframe}\n\n"
-        )
-
-        for candle in candles_data:
-
-            timestamp = candle[0]
-            low = float(candle[1])
-            high = float(candle[2])
-            open_price = float(candle[3])
-            close = float(candle[4])
-            volume = float(candle[5])
-
-            message += (
-                f"━━━━━━━━━━━━\n"
-                f"Open:  ${open_price:,.2f}\n"
-                f"High:  ${high:,.2f}\n"
-                f"Low:   ${low:,.2f}\n"
-                f"Close: ${close:,.2f}\n"
-                f"Volume: {volume:,.4f}\n"
+        for candle in reversed(latest):
+            lines.append(
+                f"Open: {format_price(candle['open'])}\n"
+                f"High: {format_price(candle['high'])}\n"
+                f"Low: {format_price(candle['low'])}\n"
+                f"Close: {format_price(candle['close'])}\n"
+                f"Volume: {candle['volume']:.4f}\n"
+                "────────────"
             )
 
         await update.message.reply_text(
-            message
+            "\n".join(lines)
         )
 
     except Exception as e:
-
-        print(
-            f"Candles API error: {e}",
-            flush=True
-        )
+        print("CANDLES ERROR:", e)
 
         await update.message.reply_text(
-            "❌ دریافت اطلاعات کندلی با خطا مواجه شد."
+            "❌ خطا در دریافت کندل‌ها."
         )
-# =========================
-# کندل
-# =========================
-async def rsi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+
+# ============================================================
+# /rsi
+# ============================================================
+
+async def rsi(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if len(context.args) < 2:
         await update.message.reply_text(
-            "فرمت دستور:\n\n"
-            "/rsi BTC 1h\n\n"
-            "مثال:\n"
-            "/rsi BTC 1h"
+            "مثال:\n/rsi BTC 1h"
         )
         return
 
     symbol = context.args[0].upper()
     timeframe = context.args[1].lower()
 
-    symbols = {
-        "BTC": "BTC-USD",
-        "ETH": "ETH-USD"
-    }
+    product_id = get_product_id(symbol)
+    granularity = get_granularity(timeframe)
 
-    if symbol not in symbols:
+    if not product_id or not granularity:
         await update.message.reply_text(
-            "فعلاً فقط BTC و ETH فعال هستند."
+            "❌ Symbol یا timeframe نامعتبر است."
         )
         return
-
-    timeframes = {
-        "1m": 60,
-        "5m": 300,
-        "15m": 900,
-        "1h": 3600,
-        "6h": 21600,
-        "1d": 86400
-    }
-
-    if timeframe not in timeframes:
-        await update.message.reply_text(
-            "تایم‌فریم‌های قابل استفاده:\n\n"
-            "1m\n"
-            "5m\n"
-            "15m\n"
-            "1h\n"
-            "6h\n"
-            "1d"
-        )
-        return
-
-    product_id = symbols[symbol]
-
-    url = (
-        f"https://api.exchange.coinbase.com/"
-        f"products/{product_id}/candles"
-    )
-
-    params = {
-        "granularity": timeframes[timeframe]
-    }
 
     try:
-
-        async with httpx.AsyncClient(timeout=10) as client:
-
-            response = await client.get(
-                url,
-                params=params,
-                headers={
-                    "Accept": "application/json"
-                }
-            )
-
-            response.raise_for_status()
-
-            data = response.json()
-
-        if len(data) < 15:
-            await update.message.reply_text(
-                "❌ برای محاسبه RSI داده کافی دریافت نشد."
-            )
-            return
-
-        # Coinbase:
-        # [time, low, high, open, close, volume]
-
-        # مرتب‌سازی از قدیمی به جدید
-        data = sorted(
-            data,
-            key=lambda x: x[0]
+        data = await fetch_candles(
+            product_id,
+            granularity
         )
 
         closes = [
-            float(candle[4])
+            candle["close"]
             for candle in data
         ]
 
-        period = 14
+        rsi_value = calculate_rsi(
+            closes,
+            14
+        )
 
-        gains = []
-        losses = []
-
-        for i in range(1, len(closes)):
-
-            change = closes[i] - closes[i - 1]
-
-            if change > 0:
-                gains.append(change)
-                losses.append(0)
-            else:
-                gains.append(0)
-                losses.append(abs(change))
-
-        avg_gain = sum(
-            gains[:period]
-        ) / period
-
-        avg_loss = sum(
-            losses[:period]
-        ) / period
-
-        for i in range(period, len(gains)):
-
-            avg_gain = (
-                (avg_gain * (period - 1))
-                + gains[i]
-            ) / period
-
-            avg_loss = (
-                (avg_loss * (period - 1))
-                + losses[i]
-            ) / period
-
-        if avg_loss == 0:
-
-            rsi_value = 100
-
-        else:
-
-            rs = avg_gain / avg_loss
-
-            rsi_value = (
-                100
-                - (100 / (1 + rs))
+        if rsi_value is None:
+            await update.message.reply_text(
+                "❌ کندل کافی برای RSI وجود ندارد."
             )
+            return
 
         if rsi_value >= 70:
-
-            status = "🔴 محدوده اشباع خرید"
-
+            status = "🔴 اشباع خرید"
         elif rsi_value <= 30:
-
-            status = "🟢 محدوده اشباع فروش"
-
+            status = "🟢 اشباع فروش"
         else:
-
             status = "🟡 محدوده میانی"
 
         message = (
-            f"📊 RSI Analysis\n\n"
-            f"🪙 {symbol}/USD\n"
-            f"⏱ تایم‌فریم: {timeframe}\n\n"
-            f"RSI(14): {rsi_value:.2f}\n\n"
-            f"وضعیت: {status}"
-        )
-
-        await update.message.reply_text(
-            message
-        )
-
-    except Exception as e:
-
-        print(
-            f"RSI API error: {e}",
-            flush=True
-        )
-
-        await update.message.reply_text(
-            "❌ محاسبه RSI با خطا مواجه شد."
-        )
-# ===================
-# RSI
-# ==================
-async def macd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if len(context.args) < 2:
-        await update.message.reply_text(
-            "لطفاً ارز و تایم‌فریم را وارد کن.\n\n"
-            "مثال:\n"
-            "/macd BTC 1h"
-        )
-        return
-
-    symbol = context.args[0].upper()
-    timeframe = context.args[1].lower()
-
-    symbols = {
-        "BTC": "BTC-USD",
-        "ETH": "ETH-USD"
-    }
-
-    timeframes = {
-        "1m": 60,
-        "5m": 300,
-        "15m": 900,
-        "1h": 3600,
-        "6h": 21600,
-        "1d": 86400
-    }
-
-    if symbol not in symbols:
-        await update.message.reply_text(
-            "فعلاً فقط BTC و ETH فعال هستند."
-        )
-        return
-
-    if timeframe not in timeframes:
-        await update.message.reply_text(
-            "تایم‌فریم نامعتبر است.\n\n"
-            "تایم‌فریم‌های مجاز:\n"
-            "1m\n"
-            "5m\n"
-            "15m\n"
-            "1h\n"
-            "6h\n"
-            "1d"
-        )
-        return
-
-    product_id = symbols[symbol]
-    granularity = timeframes[timeframe]
-
-    url = (
-        f"https://api.exchange.coinbase.com/"
-        f"products/{product_id}/candles"
-    )
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-
-            response = await client.get(
-                url,
-                params={"granularity": granularity},
-                headers={"Accept": "application/json"}
-            )
-
-            response.raise_for_status()
-            data = response.json()
-
-        if len(data) < 35:
-            await update.message.reply_text(
-                "❌ اطلاعات کافی برای محاسبه MACD دریافت نشد."
-            )
-            return
-
-        # مرتب‌سازی از قدیمی به جدید
-        data.sort(key=lambda x: x[0])
-
-        closes = [float(candle[4]) for candle in data]
-
-        # EMA
-        def calculate_ema(values, period):
-
-            multiplier = 2 / (period + 1)
-
-            ema = sum(values[:period]) / period
-            ema_values = [ema]
-
-            for price in values[period:]:
-                ema = (
-                    (price - ema) * multiplier
-                    + ema
-                )
-
-                ema_values.append(ema)
-
-            return ema_values
-
-        # EMA 12
-        ema12 = calculate_ema(closes, 12)
-
-        # EMA 26
-        ema26 = calculate_ema(closes, 26)
-
-        # برای هم‌تراز شدن EMA12 با EMA26
-        ema12_aligned = ema12[14:]
-
-        macd_values = []
-
-        for i in range(len(ema26)):
-            macd_value = (
-                ema12_aligned[i]
-                - ema26[i]
-            )
-
-            macd_values.append(macd_value)
-
-        # Signal = EMA 9 روی MACD
-        if len(macd_values) < 9:
-            await update.message.reply_text(
-                "❌ اطلاعات کافی برای محاسبه Signal وجود ندارد."
-            )
-            return
-
-        signal_values = calculate_ema(
-            macd_values,
-            9
-        )
-
-        macd_current = macd_values[-1]
-        signal_current = signal_values[-1]
-
-        histogram = (
-            macd_current
-            - signal_current
-        )
-
-        if macd_current > signal_current:
-            status = "🟢 MACD بالاتر از Signal است"
-        elif macd_current < signal_current:
-            status = "🔴 MACD پایین‌تر از Signal است"
-        else:
-            status = "🟡 MACD و Signal برابر هستند"
-
-        message = (
-            f"📊 MACD Analysis\n\n"
-            f"🪙 {symbol}/USD\n"
-            f"⏱ تایم‌فریم: {timeframe}\n\n"
-            f"MACD: {macd_current:.4f}\n"
-            f"Signal: {signal_current:.4f}\n"
-            f"Histogram: {histogram:.4f}\n\n"
-            f"وضعیت: {status}"
+            f"📊 RSI — {symbol} — {timeframe}\n\n"
+            f"RSI(14): {rsi_value:.2f}\n"
+            f"Status: {status}"
         )
 
         await update.message.reply_text(message)
 
     except Exception as e:
-
-        print(
-            f"MACD API error: {e}",
-            flush=True
-        )
+        print("RSI ERROR:", e)
 
         await update.message.reply_text(
-            "❌ دریافت اطلاعات MACD با خطا مواجه شد."
+            "❌ خطا در محاسبه RSI."
         )
-# ===============
-# MACD
-# ===============
-async def ema(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+
+# ============================================================
+# /ema
+# ============================================================
+
+async def ema(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if len(context.args) < 2:
         await update.message.reply_text(
-            "لطفاً ارز و تایم‌فریم را وارد کن.\n\n"
-            "مثال:\n"
-            "/ema BTC 1h"
+            "مثال:\n/ema BTC 1h"
         )
         return
 
     symbol = context.args[0].upper()
     timeframe = context.args[1].lower()
 
-    symbols = {
-        "BTC": "BTC-USD",
-        "ETH": "ETH-USD"
-    }
+    product_id = get_product_id(symbol)
+    granularity = get_granularity(timeframe)
 
-    timeframes = {
-        "1m": 60,
-        "5m": 300,
-        "15m": 900,
-        "1h": 3600,
-        "6h": 21600,
-        "1d": 86400
-    }
-
-    if symbol not in symbols:
+    if not product_id or not granularity:
         await update.message.reply_text(
-            "فعلاً فقط BTC و ETH فعال هستند."
+            "❌ Symbol یا timeframe نامعتبر است."
         )
         return
-
-    if timeframe not in timeframes:
-        await update.message.reply_text(
-            "تایم‌فریم نامعتبر است.\n\n"
-            "تایم‌فریم‌های مجاز:\n"
-            "1m\n"
-            "5m\n"
-            "15m\n"
-            "1h\n"
-            "6h\n"
-            "1d"
-        )
-        return
-
-    product_id = symbols[symbol]
-    granularity = timeframes[timeframe]
-
-    url = (
-        f"https://api.exchange.coinbase.com/"
-        f"products/{product_id}/candles"
-    )
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-
-            response = await client.get(
-                url,
-                params={"granularity": granularity},
-                headers={"Accept": "application/json"}
-            )
-
-            response.raise_for_status()
-            data = response.json()
-
-        if len(data) < 50:
-            await update.message.reply_text(
-                "❌ اطلاعات کافی برای محاسبه EMA دریافت نشد."
-            )
-            return
-
-        # قدیمی به جدید
-        data.sort(key=lambda x: x[0])
-
-        closes = [float(candle[4]) for candle in data]
-
-        def calculate_ema(values, period):
-
-            multiplier = 2 / (period + 1)
-
-            ema_value = sum(values[:period]) / period
-
-            for price in values[period:]:
-                ema_value = (
-                    (price - ema_value) * multiplier
-                    + ema_value
-                )
-
-            return ema_value
-
-        ema20 = calculate_ema(closes, 20)
-        ema50 = calculate_ema(closes, 50)
-
-        current_price = closes[-1]
-
-        if ema20 > ema50:
-            trend = "🟢 روند کوتاه‌مدت بالاتر از میان‌مدت"
-        elif ema20 < ema50:
-            trend = "🔴 روند کوتاه‌مدت پایین‌تر از میان‌مدت"
-        else:
-            trend = "🟡 EMA20 و EMA50 برابر هستند"
-
-        if current_price > ema20 and current_price > ema50:
-            position = "🟢 قیمت بالاتر از هر دو EMA قرار دارد"
-        elif current_price < ema20 and current_price < ema50:
-            position = "🔴 قیمت پایین‌تر از هر دو EMA قرار دارد"
-        else:
-            position = "🟡 قیمت بین EMA20 و EMA50 قرار دارد"
-
-        message = (
-            f"📊 EMA Analysis\n\n"
-            f"🪙 {symbol}/USD\n"
-            f"⏱ تایم‌فریم: {timeframe}\n\n"
-            f"💰 قیمت فعلی: ${current_price:,.2f}\n\n"
-            f"EMA 20: ${ema20:,.2f}\n"
-            f"EMA 50: ${ema50:,.2f}\n\n"
-            f"روند: {trend}\n"
-            f"موقعیت قیمت: {position}"
+        data = await fetch_candles(
+            product_id,
+            granularity
         )
-
-        await update.message.reply_text(message)
-
-    except Exception as e:
-
-        print(
-            f"EMA API error: {e}",
-            flush=True
-        )
-
-        await update.message.reply_text(
-            "❌ دریافت اطلاعات EMA با خطا مواجه شد."
-        )
-# ===================
-# EMA
-# ===================
-async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if len(context.args) < 2:
-        await update.message.reply_text(
-            "لطفاً ارز و تایم‌فریم را وارد کن.\n\n"
-            "مثال:\n"
-            "/analyze BTC 1h"
-        )
-        return
-
-    symbol = context.args[0].upper()
-    timeframe = context.args[1].lower()
-
-    symbols = {
-        "BTC": "BTC-USD",
-        "ETH": "ETH-USD"
-    }
-
-    timeframes = {
-        "1m": 60,
-        "5m": 300,
-        "15m": 900,
-        "1h": 3600,
-        "6h": 21600,
-        "1d": 86400
-    }
-
-    if symbol not in symbols:
-        await update.message.reply_text(
-            "فعلاً فقط BTC و ETH فعال هستند."
-        )
-        return
-
-    if timeframe not in timeframes:
-        await update.message.reply_text(
-            "تایم‌فریم نامعتبر است.\n\n"
-            "مجاز:\n"
-            "1m | 5m | 15m | 1h | 6h | 1d"
-        )
-        return
-
-    product_id = symbols[symbol]
-    granularity = timeframes[timeframe]
-
-    url = (
-        f"https://api.exchange.coinbase.com/"
-        f"products/{product_id}/candles"
-    )
-
-    try:
-
-        async with httpx.AsyncClient(timeout=10) as client:
-
-            response = await client.get(
-                url,
-                params={"granularity": granularity},
-                headers={"Accept": "application/json"}
-            )
-
-            response.raise_for_status()
-            data = response.json()
-
-        if len(data) < 50:
-            await update.message.reply_text(
-                "❌ اطلاعات کافی برای تحلیل دریافت نشد."
-            )
-            return
-
-        data.sort(key=lambda x: x[0])
 
         closes = [
-            float(candle[4])
+            candle["close"]
             for candle in data
         ]
 
+        if len(closes) < 50:
+            await update.message.reply_text(
+                "❌ حداقل 50 کندل لازم است."
+            )
+            return
+
+        ema20 = calculate_ema(
+            closes,
+            20
+        )
+
+        ema50 = calculate_ema(
+            closes,
+            50
+        )
+
         current_price = closes[-1]
 
-        # =========================
-        # EMA
-        # =========================
-
-        def calculate_ema(values, period):
-
-            multiplier = 2 / (period + 1)
-
-            ema_value = sum(values[:period]) / period
-
-            for price in values[period:]:
-                ema_value = (
-                    (price - ema_value) * multiplier
-                    + ema_value
-                )
-
-            return ema_value    
-
-
-        def calculate_ema_series(values, period):
-
-            multiplier = 2 / (period + 1)
-
-            ema = sum(values[:period]) / period
-
-            result = [ema]
-
-            for price in values[period:]:
-
-                ema = (
-                    (price - ema) * multiplier
-                    + ema
-                )
-
-                result.append(ema)
-
-            return result
-        ema20 = calculate_ema(closes, 20)
-        ema50 = calculate_ema(closes, 50)
-        # =========================
-        # تشخیص کراس EMA20 / EMA50
-        # =========================
-
-        ema20_series = calculate_ema_series(closes, 20)
-        ema50_series = calculate_ema_series(closes, 50)
-
-        # هم‌تراز کردن EMA20 با EMA50
-        ema20_aligned = ema20_series[30:]
-
-        ema_cross_status = "⚪ در ۵ کندل اخیر کراس جدیدی مشاهده نشد"
-
-        # فقط ۵ کندل اخیر
-        start_index = max(1, len(ema50_series) - 5)
-
-        for i in range(start_index, len(ema50_series)):
-
-            previous_fast = ema20_aligned[i - 1]
-            previous_slow = ema50_series[i - 1]
-
-            current_fast = ema20_aligned[i]
-            current_slow = ema50_series[i]
-
-            # کراس صعودی
-            if (
-                previous_fast <= previous_slow
-                and current_fast > current_slow
-            ):
-                ema_cross_status = (
-                    f"🟢 کراس صعودی EMA20/EMA50\n"
-                    f"⏱ حدود {len(ema50_series) - i} کندل قبل"
-                )
-                break
-
-            # کراس نزولی
-            elif (
-                previous_fast >= previous_slow
-                and current_fast < current_slow
-            ):
-                ema_cross_status = (
-                    f"🔴 کراس نزولی EMA20/EMA50\n"
-                    f"⏱ حدود {len(ema50_series) - i} کندل قبل"
-                )
-                break
-
-
-        # =========================
-        # تشخیص کراس MACD / Signal
-        # =========================
-
-        ema12_series = calculate_ema_series(closes, 12)
-        ema26_series = calculate_ema_series(closes, 26)
-
-        # هم‌تراز کردن EMA12 با EMA26
-        ema12_aligned = ema12_series[14:]
-
-        macd_series = []
-
-        for i in range(len(ema26_series)):
-
-            macd_series.append(
-                ema12_aligned[i]
-                - ema26_series[i]
-            )
-
-        # Signal = EMA9 روی MACD
-        signal_series = calculate_ema_series(
-            macd_series,
-            9
-        )
-
-        # هم‌تراز کردن MACD با Signal
-        macd_aligned = macd_series[8:]
-
-        macd_cross_status = "⚪ در ۵ کندل اخیر کراس جدیدی مشاهده نشد"
-
-        # فقط ۵ کندل اخیر
-        start_index = max(1, len(signal_series) - 5)
-
-        for i in range(start_index, len(signal_series)):
-
-            previous_macd = macd_aligned[i - 1]
-            previous_signal = signal_series[i - 1]
-
-            current_macd = macd_aligned[i]
-            current_signal = signal_series[i]
-
-            # کراس صعودی
-            if (
-                previous_macd <= previous_signal
-                and current_macd > current_signal
-            ):
-                macd_cross_status = (
-                    f"🟢 کراس صعودی MACD\n"
-                    f"⏱ حدود {len(signal_series) - i} کندل قبل"
-                )
-                break
-
-            # کراس نزولی
-            elif (
-                previous_macd >= previous_signal
-                and current_macd < current_signal
-            ):
-                macd_cross_status = (
-                    f"🔴 کراس نزولی MACD\n"
-                    f"⏱ حدود {len(signal_series) - i} کندل قبل"
-                )
-                break
-
-        # =========================
-        # RSI
-        # =========================
-
-        gains = []
-        losses = []
-
-        for i in range(1, len(closes)):
-
-            change = closes[i] - closes[i - 1]
-
-            if change > 0:
-                gains.append(change)
-                losses.append(0)
-            else:
-                gains.append(0)
-                losses.append(abs(change))
-
-        period = 14
-
-        avg_gain = sum(gains[:period]) / period
-        avg_loss = sum(losses[:period]) / period
-
-        for i in range(period, len(gains)):
-
-            avg_gain = (
-                (avg_gain * (period - 1))
-                + gains[i]
-            ) / period
-
-            avg_loss = (
-                (avg_loss * (period - 1))
-                + losses[i]
-            ) / period
-
-        if avg_loss == 0:
-            rsi_value = 100
-        else:
-            rs = avg_gain / avg_loss
-            rsi_value = 100 - (
-                100 / (1 + rs)
-            )
-
-        # =========================
-        # MACD
-        # =========================
-
-        ema12_values = []
-
-        multiplier12 = 2 / 13
-
-        ema12 = sum(closes[:12]) / 12
-        ema12_values.append(ema12)
-
-        for price in closes[12:]:
-
-            ema12 = (
-                (price - ema12) * multiplier12
-                + ema12
-            )
-
-            ema12_values.append(ema12)
-
-        ema26_values = []
-
-        multiplier26 = 2 / 27
-
-        ema26 = sum(closes[:26]) / 26
-        ema26_values.append(ema26)
-
-        for price in closes[26:]:
-
-            ema26 = (
-                (price - ema26) * multiplier26
-                + ema26
-            )
-
-            ema26_values.append(ema26)
-
-        ema12_aligned = ema12_values[14:]
-
-        macd_values = []
-
-        for i in range(len(ema26_values)):
-
-            macd_values.append(
-                ema12_aligned[i]
-                - ema26_values[i]
-            )
-
-        signal_period = 9
-        signal_multiplier = 2 / 10
-
-        signal = (
-            sum(macd_values[:signal_period])
-            / signal_period
-        )
-
-        for value in macd_values[signal_period:]:
-
-            signal = (
-                (value - signal)
-                * signal_multiplier
-                + signal
-            )
-
-        macd_value = macd_values[-1]
-        signal_value = signal
-        histogram = macd_value - signal_value
-
-        # =========================
-        # تحلیل RSI
-        # =========================
-
-        if rsi_value >= 70:
-            rsi_status = "🔴 اشباع خرید"
-        elif rsi_value <= 30:
-            rsi_status = "🟢 اشباع فروش"
-        else:
-            rsi_status = "🟡 محدوده میانی"
-
-        # =========================
-        # تحلیل MACD
-        # =========================
-
-        if macd_value > signal_value:
-            macd_status = "🟢 MACD بالاتر از Signal"
-        elif macd_value < signal_value:
-            macd_status = "🔴 MACD پایین‌تر از Signal"
-        else:
-            macd_status = "🟡 MACD و Signal برابر"
-
-        # =========================
-        # تحلیل EMA
-        # =========================
-
         if ema20 > ema50:
-            ema_status = "🟢 EMA20 بالاتر از EMA50"
+            trend = "🟢 روند EMA صعودی"
+        elif ema20 < ema50:
+            trend = "🔴 روند EMA نزولی"
         else:
-            ema_status = "🔴 EMA20 پایین‌تر از EMA50"
+            trend = "🟡 EMAها برابر"
 
         if current_price > ema20:
             price_status = "🟢 قیمت بالاتر از EMA20"
         else:
             price_status = "🔴 قیمت پایین‌تر از EMA20"
 
-        # =========================
-        # جمع‌بندی
-        # =========================
-
-        bullish_points = 0
-        bearish_points = 0
-
-        if rsi_value > 50:
-            bullish_points += 1
-        elif rsi_value < 50:
-            bearish_points += 1
-
-        if macd_value > signal_value:
-            bullish_points += 1
-        elif macd_value < signal_value:
-            bearish_points += 1
-
-        if ema20 > ema50:
-            bullish_points += 1
-        elif ema20 < ema50:
-            bearish_points += 1
-
-        if bullish_points > bearish_points:
-            overall = "🟢 تمایل صعودی"
-        elif bearish_points > bullish_points:
-            overall = "🔴 تمایل نزولی"
-        else:
-            overall = "🟡 وضعیت ترکیبی"
-
         message = (
-            f"📊 تحلیل ترکیبی بازار\n\n"
-            f"🪙 {symbol}/USD\n"
-            f"⏱ تایم‌فریم: {timeframe}\n\n"
-
-            f"💰 قیمت: ${current_price:,.2f}\n\n"
-
-            f"━━ RSI ━━\n"
-            f"RSI(14): {rsi_value:.2f}\n"
-            f"{rsi_status}\n\n"
-
-            f"━━ MACD ━━\n"
-            f"MACD: {macd_value:.4f}\n"
-            f"Signal: {signal_value:.4f}\n"
-            f"Histogram: {histogram:.4f}\n"
-            f"{macd_status}\n\n"
-
-            f"━━ EMA ━━\n"
-            f"EMA20: ${ema20:,.2f}\n"
-            f"EMA50: ${ema50:,.2f}\n"
-            f"{ema_status}\n"
-            f"{price_status}\n\n"
-            
-            f"کراس EMA: {ema_cross_status}\n"
-            f"کراس MACD: {macd_cross_status}\n\n"
-
-            f"━━ جمع‌بندی ━━\n"
-            f"🟢 عوامل صعودی: {bullish_points}\n"
-            f"🔴 عوامل نزولی: {bearish_points}\n\n"
-            f"وضعیت کلی: {overall}"
+            f"📈 EMA — {symbol} — {timeframe}\n\n"
+            f"Price: {format_price(current_price)}\n"
+            f"EMA20: {format_price(ema20)}\n"
+            f"EMA50: {format_price(ema50)}\n\n"
+            f"{trend}\n"
+            f"{price_status}"
         )
 
         await update.message.reply_text(message)
 
     except Exception as e:
-
-        print(
-            f"Analyze API error: {e}",
-            flush=True
-        )
+        print("EMA ERROR:", e)
 
         await update.message.reply_text(
-            "❌ در تحلیل بازار خطایی رخ داد."
+            "❌ خطا در محاسبه EMA."
         )
-# ====================
-# ANALYS
-# ====================
-async def cross(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+
+# ============================================================
+# /macd
+# ============================================================
+
+async def macd(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if len(context.args) < 2:
         await update.message.reply_text(
-            "لطفاً ارز و تایم‌فریم را وارد کن.\n\n"
-            "مثال:\n"
-            "/cross BTC 1h"
+            "مثال:\n/macd BTC 1h"
         )
         return
 
     symbol = context.args[0].upper()
     timeframe = context.args[1].lower()
 
-    symbols = {
-        "BTC": "BTC-USD",
-        "ETH": "ETH-USD"
-    }
+    product_id = get_product_id(symbol)
+    granularity = get_granularity(timeframe)
 
-    timeframes = {
-        "1m": 60,
-        "5m": 300,
-        "15m": 900,
-        "1h": 3600,
-        "6h": 21600,
-        "1d": 86400
-    }
-
-    if symbol not in symbols:
+    if not product_id or not granularity:
         await update.message.reply_text(
-            "فعلاً فقط BTC و ETH فعال هستند."
+            "❌ Symbol یا timeframe نامعتبر است."
         )
         return
-
-    if timeframe not in timeframes:
-        await update.message.reply_text(
-            "تایم‌فریم نامعتبر است.\n\n"
-            "مجاز:\n"
-            "1m | 5m | 15m | 1h | 6h | 1d"
-        )
-        return
-
-    product_id = symbols[symbol]
-    granularity = timeframes[timeframe]
-
-    url = (
-        f"https://api.exchange.coinbase.com/"
-        f"products/{product_id}/candles"
-    )
 
     try:
-
-        async with httpx.AsyncClient(timeout=10) as client:
-
-            response = await client.get(
-                url,
-                params={"granularity": granularity},
-                headers={"Accept": "application/json"}
-            )
-
-            response.raise_for_status()
-            data = response.json()
-
-        if len(data) < 60:
-            await update.message.reply_text(
-                "❌ اطلاعات کافی برای تشخیص کراس دریافت نشد."
-            )
-            return
-
-        data.sort(key=lambda x: x[0])
+        data = await fetch_candles(
+            product_id,
+            granularity
+        )
 
         closes = [
-            float(candle[4])
+            candle["close"]
             for candle in data
         ]
 
-        # =========================
-        # تابع محاسبه EMA
-        # =========================
-
-        def calculate_ema_series(values, period):
-
-            multiplier = 2 / (period + 1)
-
-            ema = sum(values[:period]) / period
-
-            result = [ema]
-
-            for price in values[period:]:
-
-                ema = (
-                    (price - ema) * multiplier
-                    + ema
-                )
-
-                result.append(ema)
-
-            return result
-
-        # =========================
-        # EMA20 / EMA50
-        # =========================
-
-        ema20 = calculate_ema_series(
-            closes,
-            20
-        )
-
-        ema50 = calculate_ema_series(
-            closes,
-            50
-        )
-
-        # هم‌تراز کردن EMA20 با EMA50
-        ema20_aligned = ema20[30:]
-
-        ema_cross = None
-        ema_cross_candle = None
-
-        # فقط 5 کندل اخیر
-        start_index = max(
-            1,
-            len(ema50) - 5
-        )
-
-        for i in range(
-            start_index,
-            len(ema50)
-        ):
-
-            previous_fast = ema20_aligned[i - 1]
-            previous_slow = ema50[i - 1]
-
-            current_fast = ema20_aligned[i]
-            current_slow = ema50[i]
-
-            if (
-                previous_fast <= previous_slow
-                and current_fast > current_slow
-            ):
-
-                ema_cross = (
-                    "🟢 کراس صعودی EMA20/EMA50"
-                )
-
-                ema_cross_candle = (
-                    len(ema50) - i
-                )
-
-            elif (
-                previous_fast >= previous_slow
-                and current_fast < current_slow
-            ):
-
-                ema_cross = (
-                    "🔴 کراس نزولی EMA20/EMA50"
-                )
-
-                ema_cross_candle = (
-                    len(ema50) - i
-                )
-
-        if ema_cross is None:
-
-            if ema20_aligned[-1] > ema50[-1]:
-
-                ema_status = (
-                    "🟢 EMA20 بالاتر از EMA50 است"
-                )
-
-            else:
-
-                ema_status = (
-                    "🔴 EMA20 پایین‌تر از EMA50 است"
-                )
-
-            ema_cross = (
-                f"⚪ در ۵ کندل اخیر کراس جدیدی مشاهده نشد\n"
-                f"{ema_status}"
+        if len(closes) < 35:
+            await update.message.reply_text(
+                "❌ حداقل 35 کندل لازم است."
             )
+            return
 
+        macd_data = calculate_macd(closes)
+
+        macd_value = macd_data["macd"][-1]
+        signal_value = macd_data["signal"][-1]
+        histogram = macd_data["histogram"][-1]
+
+        if macd_value > signal_value:
+            status = "🟢 MACD بالاتر از Signal"
+        elif macd_value < signal_value:
+            status = "🔴 MACD پایین‌تر از Signal"
         else:
-
-            ema_cross = (
-                f"{ema_cross}\n"
-                f"⏱ حدود {ema_cross_candle} کندل قبل"
-            )
-
-        # =========================
-        # MACD
-        # =========================
-
-        ema12 = calculate_ema_series(
-            closes,
-            12
-        )
-
-        ema26 = calculate_ema_series(
-            closes,
-            26
-        )
-
-        # هم‌تراز کردن EMA12 با EMA26
-        ema12_aligned = ema12[14:]
-
-        macd_values = []
-
-        for i in range(len(ema26)):
-
-            macd_values.append(
-                ema12_aligned[i]
-                - ema26[i]
-            )
-
-        # Signal = EMA9 روی MACD
-        signal_values = calculate_ema_series(
-            macd_values,
-            9
-        )
-
-        # هم‌تراز کردن MACD با Signal
-        macd_aligned = macd_values[8:]
-
-        macd_cross = None
-        macd_cross_candle = None
-
-        # فقط 5 کندل اخیر
-        start_index = max(
-            1,
-            len(signal_values) - 5
-        )
-
-        for i in range(
-            start_index,
-            len(signal_values)
-        ):
-
-            previous_macd = macd_aligned[i - 1]
-            previous_signal = signal_values[i - 1]
-
-            current_macd = macd_aligned[i]
-            current_signal = signal_values[i]
-
-            if (
-                previous_macd <= previous_signal
-                and current_macd > current_signal
-            ):
-
-                macd_cross = (
-                    "🟢 کراس صعودی MACD"
-                )
-
-                macd_cross_candle = (
-                    len(signal_values) - i
-                )
-
-            elif (
-                previous_macd >= previous_signal
-                and current_macd < current_signal
-            ):
-
-                macd_cross = (
-                    "🔴 کراس نزولی MACD"
-                )
-
-                macd_cross_candle = (
-                    len(signal_values) - i
-                )
-
-        if macd_cross is None:
-
-            if macd_aligned[-1] > signal_values[-1]:
-
-                macd_status = (
-                    "🟢 MACD بالاتر از Signal است"
-                )
-
-            else:
-
-                macd_status = (
-                    "🔴 MACD پایین‌تر از Signal است"
-                )
-
-            macd_cross = (
-                f"⚪ در ۵ کندل اخیر کراس جدیدی مشاهده نشد\n"
-                f"{macd_status}"
-            )
-
-        else:
-
-            macd_cross = (
-                f"{macd_cross}\n"
-                f"⏱ حدود {macd_cross_candle} کندل قبل"
-            )
-
-        # =========================
-        # پیام نهایی
-        # =========================
+            status = "🟡 MACD و Signal برابر"
 
         message = (
-            f"🔄 بررسی کراس‌ها\n\n"
-            f"🪙 {symbol}/USD\n"
-            f"⏱ تایم‌فریم: {timeframe}\n\n"
-
-            f"━━ EMA ━━\n"
-            f"{ema_cross}\n\n"
-
-            f"━━ MACD ━━\n"
-            f"{macd_cross}"
+            f"📊 MACD — {symbol} — {timeframe}\n\n"
+            f"MACD: {macd_value:.6f}\n"
+            f"Signal: {signal_value:.6f}\n"
+            f"Histogram: {histogram:.6f}\n\n"
+            f"{status}"
         )
 
-        await update.message.reply_text(
-            message
-        )
+        await update.message.reply_text(message)
 
     except Exception as e:
-
-        print(
-            f"Cross API error: {e}",
-            flush=True
-        )
+        print("MACD ERROR:", e)
 
         await update.message.reply_text(
-            "❌ در بررسی کراس‌ها خطایی رخ داد."
+            "❌ خطا در محاسبه MACD."
         )
-# ==========================
-# CROSS
-# =========================
-# =========================
-# HTTP Server
-# =========================
+
+
+# ============================================================
+# /cross
+# ============================================================
+
+async def cross(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "مثال:\n/cross BTC 1h"
+        )
+        return
+
+    symbol = context.args[0].upper()
+    timeframe = context.args[1].lower()
+
+    product_id = get_product_id(symbol)
+    granularity = get_granularity(timeframe)
+
+    if not product_id or not granularity:
+        await update.message.reply_text(
+            "❌ Symbol یا timeframe نامعتبر است."
+        )
+        return
+
+    try:
+        data = await fetch_candles(
+            product_id,
+            granularity
+        )
+
+        if len(data) < 60:
+            await update.message.reply_text(
+                "❌ حداقل 60 کندل لازم است."
+            )
+            return
+
+        result = analyze_market(
+            data,
+            symbol,
+            timeframe
+        )
+
+        ema_cross = result["cross"]["ema"]
+        macd_cross = result["cross"]["macd"]
+
+        # ----------------------------------------------------
+        # EMA Cross
+        # ----------------------------------------------------
+
+        if ema_cross["detected"]:
+
+            if ema_cross["direction"] == "BULLISH":
+                ema_message = (
+                    "🟢 EMA20/EMA50 Bullish Cross"
+                )
+            else:
+                ema_message = (
+                    "🔴 EMA20/EMA50 Bearish Cross"
+                )
+
+            ema_message += (
+                f"\n⏱ {ema_cross['bars_ago']} کندل قبل"
+            )
+
+        else:
+
+            ema_relation = result["ema"]["relation"]
+
+            if ema_relation == "BULLISH":
+                ema_message = (
+                    "ℹ️ کراس EMA20/EMA50 در 5 کندل اخیر "
+                    "دیده نشد.\n"
+                    "EMA20 بالاتر از EMA50 است."
+                )
+
+            elif ema_relation == "BEARISH":
+                ema_message = (
+                    "ℹ️ کراس EMA20/EMA50 در 5 کندل اخیر "
+                    "دیده نشد.\n"
+                    "EMA20 پایین‌تر از EMA50 است."
+                )
+
+            else:
+                ema_message = (
+                    "ℹ️ کراس EMA20/EMA50 در 5 کندل اخیر "
+                    "دیده نشد."
+                )
+
+        # ----------------------------------------------------
+        # MACD Cross
+        # ----------------------------------------------------
+
+        if macd_cross["detected"]:
+
+            if macd_cross["direction"] == "BULLISH":
+                macd_message = (
+                    "🟢 MACD Bullish Cross"
+                )
+            else:
+                macd_message = (
+                    "🔴 MACD Bearish Cross"
+                )
+
+            macd_message += (
+                f"\n⏱ {macd_cross['bars_ago']} کندل قبل"
+            )
+
+        else:
+
+            macd_relation = result["macd"]["relation"]
+
+            if macd_relation == "BULLISH":
+                macd_message = (
+                    "ℹ️ کراس MACD در 5 کندل اخیر "
+                    "دیده نشد.\n"
+                    "MACD بالاتر از Signal است."
+                )
+
+            elif macd_relation == "BEARISH":
+                macd_message = (
+                    "ℹ️ کراس MACD در 5 کندل اخیر "
+                    "دیده نشد.\n"
+                    "MACD پایین‌تر از Signal است."
+                )
+
+            else:
+                macd_message = (
+                    "ℹ️ کراس MACD در 5 کندل اخیر "
+                    "دیده نشد."
+                )
+
+        message = (
+            f"🔄 Cross Analysis\n"
+            f"{symbol} — {timeframe}\n\n"
+            f"{ema_message}\n\n"
+            f"{macd_message}"
+        )
+
+        await update.message.reply_text(message)
+
+    except Exception as e:
+        print("CROSS ERROR:", e)
+
+        await update.message.reply_text(
+            "❌ خطا در تشخیص Cross."
+        )
+
+
+# ============================================================
+# /analyze
+# ============================================================
+
+async def analyze(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "مثال:\n/analyze BTC 1h"
+        )
+        return
+
+    symbol = context.args[0].upper()
+    timeframe = context.args[1].lower()
+
+    product_id = get_product_id(symbol)
+    granularity = get_granularity(timeframe)
+
+    if not product_id:
+        await update.message.reply_text(
+            "❌ فقط BTC و ETH پشتیبانی می‌شوند."
+        )
+        return
+
+    if not granularity:
+        await update.message.reply_text(
+            "❌ تایم‌فریم نامعتبر است.\n"
+            "مقادیر مجاز: 1m, 5m, 15m, 1h, 6h, 1d"
+        )
+        return
+
+    try:
+        data = await fetch_candles(
+            product_id,
+            granularity
+        )
+
+        if len(data) < 60:
+            await update.message.reply_text(
+                "❌ حداقل 60 کندل برای تحلیل لازم است."
+            )
+            return
+
+        result = analyze_market(
+            data,
+            symbol,
+            timeframe
+        )
+
+        # ----------------------------------------------------
+        # Values
+        # ----------------------------------------------------
+
+        current_price = result["price"]
+
+        rsi_value = result["rsi"]["value"]
+        rsi_zone = result["rsi"]["zone"]
+
+        ema20 = result["ema"]["ema20"]
+        ema50 = result["ema"]["ema50"]
+
+        ema_trend = result["ema"]["trend"]
+        price_vs_ema20 = result["ema"]["price_vs_ema20"]
+
+        macd_value = result["macd"]["value"]
+        signal_value = result["macd"]["signal"]
+        histogram = result["macd"]["histogram"]
+
+        macd_relation = result["macd"]["relation"]
+
+        ema_cross = result["cross"]["ema"]
+        macd_cross = result["cross"]["macd"]
+
+        bullish_points = result["confluence"]["bullish_points"]
+        bearish_points = result["confluence"]["bearish_points"]
+        overall = result["confluence"]["overall"]
+
+        # ----------------------------------------------------
+        # RSI Text
+        # ----------------------------------------------------
+
+        if rsi_zone == "OVERBOUGHT":
+            rsi_status = "🔴 اشباع خرید"
+        elif rsi_zone == "OVERSOLD":
+            rsi_status = "🟢 اشباع فروش"
+        else:
+            rsi_status = "🟡 محدوده میانی"
+
+        # ----------------------------------------------------
+        # EMA Text
+        # ----------------------------------------------------
+
+        if ema_trend == "BULLISH":
+            ema_status = "🟢 EMA20 بالاتر از EMA50"
+        elif ema_trend == "BEARISH":
+            ema_status = "🔴 EMA20 پایین‌تر از EMA50"
+        else:
+            ema_status = "🟡 EMA وضعیت خنثی"
+
+        if price_vs_ema20 == "ABOVE":
+            price_status = "🟢 قیمت بالاتر از EMA20"
+        elif price_vs_ema20 == "BELOW":
+            price_status = "🔴 قیمت پایین‌تر از EMA20"
+        else:
+            price_status = "🟡 قیمت نزدیک EMA20"
+
+        # ----------------------------------------------------
+        # MACD Text
+        # ----------------------------------------------------
+
+        if macd_relation == "BULLISH":
+            macd_status = "🟢 MACD بالاتر از Signal"
+        elif macd_relation == "BEARISH":
+            macd_status = "🔴 MACD پایین‌تر از Signal"
+        else:
+            macd_status = "🟡 MACD و Signal برابر"
+
+        # ----------------------------------------------------
+        # Cross Text
+        # ----------------------------------------------------
+
+        if ema_cross["detected"]:
+
+            if ema_cross["direction"] == "BULLISH":
+                ema_cross_text = "🟢 EMA Bullish Cross"
+            else:
+                ema_cross_text = "🔴 EMA Bearish Cross"
+
+            ema_cross_text += (
+                f" — {ema_cross['bars_ago']} کندل قبل"
+            )
+
+        else:
+            ema_cross_text = (
+                "⚪ EMA Cross در 5 کندل اخیر ندارد"
+            )
+
+        if macd_cross["detected"]:
+
+            if macd_cross["direction"] == "BULLISH":
+                macd_cross_text = "🟢 MACD Bullish Cross"
+            else:
+                macd_cross_text = "🔴 MACD Bearish Cross"
+
+            macd_cross_text += (
+                f" — {macd_cross['bars_ago']} کندل قبل"
+            )
+
+        else:
+            macd_cross_text = (
+                "⚪ MACD Cross در 5 کندل اخیر ندارد"
+            )
+
+        # ----------------------------------------------------
+        # Overall
+        # ----------------------------------------------------
+
+        if overall == "BULLISH_BIAS":
+            overall_text = "🟢 تمایل کلی صعودی"
+        elif overall == "BEARISH_BIAS":
+            overall_text = "🔴 تمایل کلی نزولی"
+        else:
+            overall_text = "🟡 وضعیت ترکیبی"
+
+        # ----------------------------------------------------
+        # Final Message
+        # ----------------------------------------------------
+
+        message = (
+            f"🧠 Market Analysis\n"
+            f"{symbol} — {timeframe}\n\n"
+
+            f"💰 Price\n"
+            f"{format_price(current_price)}\n\n"
+
+            f"📊 RSI(14)\n"
+            f"{rsi_value:.2f}\n"
+            f"{rsi_status}\n\n"
+
+            f"📈 EMA\n"
+            f"EMA20: {format_price(ema20)}\n"
+            f"EMA50: {format_price(ema50)}\n"
+            f"{ema_status}\n"
+            f"{price_status}\n\n"
+
+            f"📉 MACD\n"
+            f"MACD: {macd_value:.6f}\n"
+            f"Signal: {signal_value:.6f}\n"
+            f"Histogram: {histogram:.6f}\n"
+            f"{macd_status}\n\n"
+
+            f"🔄 Cross\n"
+            f"{ema_cross_text}\n"
+            f"{macd_cross_text}\n\n"
+
+            f"🎯 Confluence\n"
+            f"🟢 Bullish Points: {bullish_points}\n"
+            f"🔴 Bearish Points: {bearish_points}\n\n"
+
+            f"{overall_text}"
+        )
+
+        await update.message.reply_text(message)
+
+    except Exception as e:
+        print("ANALYZE ERROR:", e)
+
+        await update.message.reply_text(
+            "❌ خطا در تحلیل بازار."
+        )
+
+
+# ============================================================
+# HTTP SERVER
+# ============================================================
 
 class HealthHandler(BaseHTTPRequestHandler):
 
@@ -1547,33 +1424,26 @@ class HealthHandler(BaseHTTPRequestHandler):
         if self.path == "/":
 
             self.send_response(200)
-
             self.send_header(
                 "Content-Type",
                 "text/plain; charset=utf-8"
             )
-
             self.end_headers()
 
             self.wfile.write(
                 b"Crypto Market Bot is running!"
             )
 
-            return
+        else:
 
-        self.send_response(404)
-
-        self.end_headers()
-
+            self.send_response(404)
+            self.end_headers()
 
     def do_POST(self):
 
         if self.path != WEBHOOK_PATH:
-
             self.send_response(404)
-
             self.end_headers()
-
             return
 
         try:
@@ -1589,17 +1459,16 @@ class HealthHandler(BaseHTTPRequestHandler):
                 content_length
             )
 
-            print(
-                "Telegram webhook received",
-                flush=True
-            )
+            data = body.decode("utf-8")
 
-            data = json.loads(
-                body.decode("utf-8")
-            )
+            print("Webhook received")
+
+            update_data = __import__(
+                "json"
+            ).loads(data)
 
             update = Update.de_json(
-                data,
+                update_data,
                 telegram_application.bot
             )
 
@@ -1608,47 +1477,53 @@ class HealthHandler(BaseHTTPRequestHandler):
                 event_loop
             )
 
+            def handle_result(f):
+
+                try:
+                    exception = f.exception()
+
+                    if exception:
+                        print(
+                            "Update processing error:",
+                            exception
+                        )
+                    else:
+                        print(
+                            "Update processed successfully"
+                        )
+
+                except Exception as callback_error:
+                    print(
+                        "Callback error:",
+                        callback_error
+                    )
+
             future.add_done_callback(
-                lambda f: print(
-                    f"Update processing finished: {f.exception()}"
-                    if f.exception()
-                    else "Update processed successfully",
-                    flush=True
-                )
+                handle_result
             )
 
             self.send_response(200)
-
             self.send_header(
                 "Content-Type",
-                "text/plain"
+                "text/plain; charset=utf-8"
             )
-
             self.end_headers()
 
-            self.wfile.write(
-                b"OK"
-            )
+            self.wfile.write(b"OK")
 
         except Exception as e:
 
             print(
-                f"Webhook error: {e}",
-                flush=True
+                "WEBHOOK ERROR:",
+                e
             )
 
             self.send_response(500)
-
             self.end_headers()
-
 
     def log_message(self, format, *args):
         return
 
-
-# =========================
-# HTTP Server
-# =========================
 
 def start_web_server():
 
@@ -1659,27 +1534,21 @@ def start_web_server():
         )
     )
 
-    print(
-        f"Starting HTTP server on port {port}...",
-        flush=True
-    )
-
     server = HTTPServer(
         ("0.0.0.0", port),
         HealthHandler
     )
 
     print(
-        f"HTTP server is listening on port {port}",
-        flush=True
+        f"HTTP server running on port {port}"
     )
 
     server.serve_forever()
 
 
-# =========================
-# Telegram
-# =========================
+# ============================================================
+# TELEGRAM
+# ============================================================
 
 async def start_telegram():
 
@@ -1690,25 +1559,19 @@ async def start_telegram():
     )
 
     if not token:
-
-        print(
-            "ERROR: TELEGRAM_BOT_TOKEN is not set!",
-            flush=True
+        raise RuntimeError(
+            "TELEGRAM_BOT_TOKEN environment variable is missing."
         )
 
-        return
-
-    print(
-        "Starting Telegram application...",
-        flush=True
-    )
-
     telegram_application = (
-        Application
-        .builder()
+        Application.builder()
         .token(token)
         .build()
     )
+
+    # --------------------------------------------------------
+    # Handlers
+    # --------------------------------------------------------
 
     telegram_application.add_handler(
         CommandHandler(
@@ -1723,38 +1586,56 @@ async def start_telegram():
             price
         )
     )
+
     telegram_application.add_handler(
         CommandHandler(
             "candles",
             candles
         )
     )
+
     telegram_application.add_handler(
         CommandHandler(
             "rsi",
             rsi
         )
     )
+
     telegram_application.add_handler(
-        CommandHandler("macd", macd)
+        CommandHandler(
+            "ema",
+            ema
+        )
     )
+
     telegram_application.add_handler(
-        CommandHandler("ema", ema)
+        CommandHandler(
+            "macd",
+            macd
+        )
     )
+
     telegram_application.add_handler(
-        CommandHandler("analyze", analyze)
+        CommandHandler(
+            "cross",
+            cross
+        )
     )
+
     telegram_application.add_handler(
-        CommandHandler("cross", cross)
+        CommandHandler(
+            "analyze",
+            analyze
+        )
     )
+
+    # --------------------------------------------------------
+    # Start Telegram Application
+    # --------------------------------------------------------
+
     await telegram_application.initialize()
 
     await telegram_application.start()
-
-    print(
-        "Setting Telegram webhook...",
-        flush=True
-    )
 
     await telegram_application.bot.set_webhook(
         url=WEBHOOK_URL,
@@ -1762,28 +1643,18 @@ async def start_telegram():
     )
 
     print(
-        f"Webhook set: {WEBHOOK_URL}",
-        flush=True
-    )
-
-    print(
-        "Telegram bot is running with WEBHOOK!",
-        flush=True
+        "Telegram webhook set:",
+        WEBHOOK_URL
     )
 
 
-# =========================
-# Main
-# =========================
+# ============================================================
+# MAIN
+# ============================================================
 
 def main():
 
     global event_loop
-
-    print(
-        "Starting main application...",
-        flush=True
-    )
 
     event_loop = asyncio.new_event_loop()
 
@@ -1791,7 +1662,7 @@ def main():
         event_loop
     )
 
-    # اول HTTP Server را بالا می‌آوریم
+    # Start HTTP server in background
     web_thread = threading.Thread(
         target=start_web_server,
         daemon=True
@@ -1799,21 +1670,47 @@ def main():
 
     web_thread.start()
 
-    # سپس Telegram را راه‌اندازی می‌کنیم
+    # Start Telegram
     event_loop.run_until_complete(
         start_telegram()
     )
 
     print(
-        "Event loop is now running...",
-        flush=True
+        "Crypto Market Bot started successfully."
     )
 
-    # بسیار مهم:
-    # Event Loop باید همیشه در حال اجرا بماند
-    event_loop.run_forever()
+    try:
+        event_loop.run_forever()
 
+    except KeyboardInterrupt:
+        print(
+            "Bot stopped."
+        )
+
+    finally:
+
+        try:
+            event_loop.run_until_complete(
+                telegram_application.stop()
+            )
+
+            event_loop.run_until_complete(
+                telegram_application.shutdown()
+            )
+
+        except Exception as e:
+            print(
+                "Shutdown error:",
+                e
+            )
+
+        event_loop.close()
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
 
 if __name__ == "__main__":
-
     main()
+```
