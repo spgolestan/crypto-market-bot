@@ -885,37 +885,43 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ema20_series = calculate_ema_series(closes, 20)
         ema50_series = calculate_ema_series(closes, 50)
 
+        # هم‌تراز کردن EMA20 با EMA50
         ema20_aligned = ema20_series[30:]
 
         ema_cross_status = "⚪ در ۵ کندل اخیر کراس جدیدی مشاهده نشد"
 
-    start_index = max(1, len(ema50_series) - 5)
+        # فقط ۵ کندل اخیر
+        start_index = max(1, len(ema50_series) - 5)
 
-    for i in range(start_index, len(ema50_series)):
+        for i in range(start_index, len(ema50_series)):
 
-    previous_fast = ema20_aligned[i - 1]
-    previous_slow = ema50_series[i - 1]
+            previous_fast = ema20_aligned[i - 1]
+            previous_slow = ema50_series[i - 1]
 
-    current_fast = ema20_aligned[i]
-    current_slow = ema50_series[i]
+            current_fast = ema20_aligned[i]
+            current_slow = ema50_series[i]
 
-    if (
-        previous_fast <= previous_slow
-        and current_fast > current_slow
-    ):
-        ema_cross_status = (
-            f"🟢 کراس صعودی EMA20/EMA50\n"
-            f"⏱ حدود {len(ema50_series) - i} کندل قبل"
-        )
+            # کراس صعودی
+            if (
+                previous_fast <= previous_slow
+                and current_fast > current_slow
+            ):
+                ema_cross_status = (
+                    f"🟢 کراس صعودی EMA20/EMA50\n"
+                    f"⏱ حدود {len(ema50_series) - i} کندل قبل"
+                )
+                break
 
-    elif (
-        previous_fast >= previous_slow
-        and current_fast < current_slow
-    ):
-        ema_cross_status = (
-            f"🔴 کراس نزولی EMA20/EMA50\n"
-            f"⏱ حدود {len(ema50_series) - i} کندل قبل"
-        )
+            # کراس نزولی
+            elif (
+                previous_fast >= previous_slow
+                and current_fast < current_slow
+            ):
+                ema_cross_status = (
+                    f"🔴 کراس نزولی EMA20/EMA50\n"
+                    f"⏱ حدود {len(ema50_series) - i} کندل قبل"
+                )
+                break
 
 
         # =========================
@@ -925,6 +931,7 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ema12_series = calculate_ema_series(closes, 12)
         ema26_series = calculate_ema_series(closes, 26)
 
+        # هم‌تراز کردن EMA12 با EMA26
         ema12_aligned = ema12_series[14:]
 
         macd_series = []
@@ -936,33 +943,49 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 - ema26_series[i]
             )
 
+        # Signal = EMA9 روی MACD
         signal_series = calculate_ema_series(
             macd_series,
             9
         )
 
+        # هم‌تراز کردن MACD با Signal
         macd_aligned = macd_series[8:]
 
-macd_cross_status = "⚪ در ۵ کندل اخیر کراس جدیدی مشاهده نشد"
-start_index = max(1, len(signal_series) - 5)
+        macd_cross_status = "⚪ در ۵ کندل اخیر کراس جدیدی مشاهده نشد"
 
-# پیمایش از قدیمی‌ترین به جدیدترین کندل در بازه ۵ تایی
-for i in range(start_index, len(signal_series)):
-    previous_macd = macd_aligned[i - 1]
-    previous_signal = signal_series[i - 1]
-    current_macd = macd_aligned[i]
-    current_signal = signal_series[i]
+        # فقط ۵ کندل اخیر
+        start_index = max(1, len(signal_series) - 5)
 
-    # بررسی کراس صعودی
-    if previous_macd <= previous_signal and current_macd > current_signal:
-        macd_cross_status = f"🟢 کراس صعودی MACD\n⏱ حدود {len(signal_series) - i} کندل قبل"
-        break  # پیدا شد، از حلقه خارج شو
+        for i in range(start_index, len(signal_series)):
 
-    # بررسی کراس نزولی
-    elif previous_macd >= previous_signal and current_macd < current_signal:
-        macd_cross_status = f"🔴 کراس نزولی MACD\n⏱ حدود {len(signal_series) - i} کندل قبل"
-        break  # پیدا شد، از حلقه خارج شو
+            previous_macd = macd_aligned[i - 1]
+            previous_signal = signal_series[i - 1]
 
+            current_macd = macd_aligned[i]
+            current_signal = signal_series[i]
+
+            # کراس صعودی
+            if (
+                previous_macd <= previous_signal
+                and current_macd > current_signal
+            ):
+                macd_cross_status = (
+                    f"🟢 کراس صعودی MACD\n"
+                    f"⏱ حدود {len(signal_series) - i} کندل قبل"
+                )
+                break
+
+            # کراس نزولی
+            elif (
+                previous_macd >= previous_signal
+                and current_macd < current_signal
+            ):
+                macd_cross_status = (
+                    f"🔴 کراس نزولی MACD\n"
+                    f"⏱ حدود {len(signal_series) - i} کندل قبل"
+                )
+                break
 
         # =========================
         # RSI
