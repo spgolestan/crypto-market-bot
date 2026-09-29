@@ -887,27 +887,35 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         ema20_aligned = ema20_series[30:]
 
-        ema_cross_status = "⚪ کراس جدیدی مشاهده نشد"
+        ema_cross_status = "⚪ در ۵ کندل اخیر کراس جدیدی مشاهده نشد"
 
-        for i in range(1, len(ema50_series)):
+start_index = max(1, len(ema50_series) - 5)
 
-            previous_fast = ema20_aligned[i - 1]
-            previous_slow = ema50_series[i - 1]
+for i in range(start_index, len(ema50_series)):
 
-            current_fast = ema20_aligned[i]
-            current_slow = ema50_series[i]
+    previous_fast = ema20_aligned[i - 1]
+    previous_slow = ema50_series[i - 1]
 
-            if (
-                previous_fast <= previous_slow
-                and current_fast > current_slow
-            ):
-                ema_cross_status = "🟢 کراس صعودی EMA20/EMA50"
+    current_fast = ema20_aligned[i]
+    current_slow = ema50_series[i]
 
-            elif (
-                previous_fast >= previous_slow
-                and current_fast < current_slow
-            ):
-                ema_cross_status = "🔴 کراس نزولی EMA20/EMA50"
+    if (
+        previous_fast <= previous_slow
+        and current_fast > current_slow
+    ):
+        ema_cross_status = (
+            f"🟢 کراس صعودی EMA20/EMA50\n"
+            f"⏱ حدود {len(ema50_series) - i} کندل قبل"
+        )
+
+    elif (
+        previous_fast >= previous_slow
+        and current_fast < current_slow
+    ):
+        ema_cross_status = (
+            f"🔴 کراس نزولی EMA20/EMA50\n"
+            f"⏱ حدود {len(ema50_series) - i} کندل قبل"
+        )
 
 
         # =========================
@@ -935,27 +943,35 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         macd_aligned = macd_series[8:]
 
-        macd_cross_status = "⚪ کراس جدیدی مشاهده نشد"
+     macd_cross_status = "⚪ در ۵ کندل اخیر کراس جدیدی مشاهده نشد"
 
-        for i in range(1, len(signal_series)):
+start_index = max(1, len(signal_series) - 5)
 
-            previous_macd = macd_aligned[i - 1]
-            previous_signal = signal_series[i - 1]
+for i in range(start_index, len(signal_series)):
 
-            current_macd = macd_aligned[i]
-            current_signal = signal_series[i]
+    previous_macd = macd_aligned[i - 1]
+    previous_signal = signal_series[i - 1]
 
-            if (
-                previous_macd <= previous_signal
-                and current_macd > current_signal
-            ):
-                macd_cross_status = "🟢 کراس صعودی MACD"
+    current_macd = macd_aligned[i]
+    current_signal = signal_series[i]
 
-            elif (
-                previous_macd >= previous_signal
-                and current_macd < current_signal
-            ):
-                macd_cross_status = "🔴 کراس نزولی MACD"
+    if (
+        previous_macd <= previous_signal
+        and current_macd > current_signal
+    ):
+        macd_cross_status = (
+            f"🟢 کراس صعودی MACD\n"
+            f"⏱ حدود {len(signal_series) - i} کندل قبل"
+        )
+
+    elif (
+        previous_macd >= previous_signal
+        and current_macd < current_signal
+    ):
+        macd_cross_status = (
+            f"🔴 کراس نزولی MACD\n"
+            f"⏱ حدود {len(signal_series) - i} کندل قبل"
+        )
 
         # =========================
         # RSI
