@@ -2020,6 +2020,146 @@ def analyze_market(candles, symbol, timeframe):
     }
 
 
+def calculate_mtf_confluence(analyses):
+    weights = {
+        "6h": 3,
+        "1h": 2,
+        "15m": 1,
+    }
+
+    weighted_score = 0
+    bullish_score = 0
+    bearish_score = 0
+    directions = {}
+
+    for timeframe, weight in weights.items():
+        if timeframe not in analyses:
+            continue
+
+        direction = (
+            analyses[timeframe]
+            .get("confluence", {})
+            .get("direction", "UNKNOWN")
+        )
+
+        directions[timeframe] = direction
+
+        if direction == "BULLISH":
+            bullish_score += weight
+            weighted_score += weight
+        elif direction == "BEARISH":
+            bearish_score += weight
+            weighted_score -= weight
+
+    higher_tf_direction = directions.get("6h", "UNKNOWN")
+    main_tf_direction = directions.get("1h", "UNKNOWN")
+    short_tf_direction = directions.get("15m", "UNKNOWN")
+
+    if weighted_score > 0:
+        overall_direction = "BULLISH"
+    elif weighted_score < 0:
+        overall_direction = "BEARISH"
+    else:
+        overall_direction = "MIXED"
+
+    if (
+        higher_tf_direction == "BULLISH"
+        and main_tf_direction == "BULLISH"
+        and short_tf_direction == "BULLISH"
+    ):
+        alignment = "STRONG_BULLISH"
+    elif (
+        higher_tf_direction == "BEARISH"
+        and main_tf_direction == "BEARISH"
+        and short_tf_direction == "BEARISH"
+    ):
+        alignment = "STRONG_BEARISH"
+    elif (
+        higher_tf_direction == main_tf_direction
+        and main_tf_direction != "UNKNOWN"
+    ):
+        alignment = "HIGHER_MAIN_ALIGNED"
+    elif (
+        higher_tf_direction != main_tf_direction
+        and higher_tf_direction != "UNKNOWN"
+        and main_tf_direction != "UNKNOWN"
+    ):
+        alignment = "HIGHER_MAIN_CONFLICT"
+    else:
+        alignment = "MIXED"
+
+    counter_trend = (
+        higher_tf_direction != "UNKNOWN"
+        and main_tf_direction != "UNKNOWN"
+        and higher_tf_direction != main_tf_direction
+    )
+
+    short_term_confirmation = "NEUTRAL"
+    if (
+        short_tf_direction == higher_tf_direction
+        and short_tf_direction != "UNKNOWN"
+    ):
+        short_term_confirmation = "CONFIRMS_HIGHER_TF"
+    elif (
+        short_tf_direction != higher_tf_direction
+        and short_tf_direction != "UNKNOWN"
+    ):
+        short_term_confirmation = "AGAINST_HIGHER_TF"
+
+    absolute_score = abs(weighted_score)
+    if absolute_score >= 5:
+        strength = "STRONG"
+    elif absolute_score >= 3:
+        strength = "MODERATE"
+    elif absolute_score >= 1:
+        strength = "WEAK"
+    else:
+        strength = "NEUTRAL"
+
+    if (
+        higher_tf_direction == "BEARISH"
+        and main_tf_direction == "BULLISH"
+        and short_tf_direction == "BEARISH"
+    ):
+        interpretation = (
+            "ساختار 6h نزولی است، 1h حرکت مخالف ساختار بالاتر دارد، "
+            "اما 15m دوباره با 6h هم‌جهت شده است."
+        )
+    elif (
+        higher_tf_direction == "BULLISH"
+        and main_tf_direction == "BEARISH"
+        and short_tf_direction == "BULLISH"
+    ):
+        interpretation = (
+            "ساختار 6h صعودی است، 1h حرکت مخالف ساختار بالاتر دارد، "
+            "اما 15m دوباره با 6h هم‌جهت شده است."
+        )
+    elif alignment == "STRONG_BULLISH":
+        interpretation = "هر سه تایم‌فریم هم‌جهت صعودی هستند."
+    elif alignment == "STRONG_BEARISH":
+        interpretation = "هر سه تایم‌فریم هم‌جهت نزولی هستند."
+    elif counter_trend:
+        interpretation = "تایم‌فریم اصلی با ساختار بالاتر هم‌جهت نیست."
+    else:
+        interpretation = "بین تایم‌فریم‌ها هم‌جهتی کامل وجود ندارد."
+
+    return {
+        "weighted_score": weighted_score,
+        "bullish_score": bullish_score,
+        "bearish_score": bearish_score,
+        "overall_direction": overall_direction,
+        "alignment": alignment,
+        "strength": strength,
+        "higher_tf_direction": higher_tf_direction,
+        "main_tf_direction": main_tf_direction,
+        "short_tf_direction": short_tf_direction,
+        "counter_trend": counter_trend,
+        "short_term_confirmation": short_term_confirmation,
+        "interpretation": interpretation,
+        "directions": directions,
+    }
+
+
 async def analyze_multi_timeframe(symbol):
     """15m = کوتاه‌مدت، 1h = روند اصلی، 6h = ساختار بالاتر."""
     symbol = symbol.upper()
@@ -2027,92 +2167,176 @@ async def analyze_multi_timeframe(symbol):
     analyses = {}
 
     if symbol not in SUPPORTED_SYMBOLS:
-        return {"analyses": {}, "alignment": "UNKNOWN", "alignment_score": 0, "direction": "UNKNOWN"}
+        return {
+            "analyses": {},
+            "mtf": calculate_mtf_confluence({}),
+            "directions": {},
+            "alignment": "MIXED",
+            "direction": "MIXED",
+            "strength": "NEUTRAL",
+        }
 
     for timeframe in timeframes:
         granularity = get_granularity(timeframe)
-        candles = await fetch_candles(SUPPORTED_SYMBOLS[symbol], granularity)
+        candles = await fetch_candles(
+            SUPPORTED_SYMBOLS[symbol],
+            granularity
+        )
         if candles:
-            analyses[timeframe] = analyze_market(candles, symbol, timeframe)
+            analyses[timeframe] = analyze_market(
+                candles=candles,
+                symbol=symbol,
+                timeframe=timeframe
+            )
 
-    if len(analyses) < 3:
-        return {"analyses": analyses, "alignment": "UNKNOWN", "alignment_score": 0, "direction": "UNKNOWN"}
-
-    directions = {tf: analyses[tf]["confluence"]["direction"] for tf in timeframes}
-    bullish_count = sum(d == "BULLISH" for d in directions.values())
-    bearish_count = sum(d == "BEARISH" for d in directions.values())
-
-    if bullish_count == 3:
-        alignment, direction, score = "STRONG_BULLISH", "BULLISH", 3
-    elif bearish_count == 3:
-        alignment, direction, score = "STRONG_BEARISH", "BEARISH", 3
-    elif bullish_count >= 2:
-        alignment, direction, score = "BULLISH_ALIGNMENT", "BULLISH", 2
-    elif bearish_count >= 2:
-        alignment, direction, score = "BEARISH_ALIGNMENT", "BEARISH", 2
-    else:
-        alignment, direction, score = "MIXED", "MIXED", 1
+    mtf = calculate_mtf_confluence(analyses)
 
     return {
         "analyses": analyses,
-        "alignment": alignment,
-        "alignment_score": score,
-        "direction": direction,
-        "directions": directions,
+        "mtf": mtf,
+        "directions": mtf["directions"],
+        "alignment": mtf["alignment"],
+        "direction": mtf["overall_direction"],
+        "strength": mtf["strength"],
     }
 
 
 async def mtf_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = "BTC"
+
     try:
         result = await analyze_multi_timeframe(symbol)
         analyses = result["analyses"]
+
         if not analyses:
-            await update.message.reply_text("❌ داده‌ای برای تحلیل چندتایم‌فریمی دریافت نشد.")
+            await update.message.reply_text(
+                "❌ داده‌ای برای تحلیل چندتایم‌فریمی دریافت نشد."
+            )
             return
 
-        timeframe_names = {"15m": "15 دقیقه", "1h": "1 ساعت", "6h": "6 ساعت"}
-        direction_icons = {"BULLISH": "🟢", "BEARISH": "🔴", "MIXED": "🟡", "UNKNOWN": "⚪"}
-        lines = ["📊 تحلیل Multi-Timeframe", "", "🪙 BTC/USD", "", "━━ تایم‌فریم‌ها ━━", ""]
+        mtf = result["mtf"]
+
+        weighted_score = mtf["weighted_score"]
+        bullish_score = mtf["bullish_score"]
+        bearish_score = mtf["bearish_score"]
+        overall_direction = mtf["overall_direction"]
+        alignment = mtf["alignment"]
+        strength = mtf["strength"]
+        higher_tf_direction = mtf["higher_tf_direction"]
+        main_tf_direction = mtf["main_tf_direction"]
+        short_tf_direction = mtf["short_tf_direction"]
+        counter_trend = mtf["counter_trend"]
+        short_confirmation = mtf["short_term_confirmation"]
+        interpretation = mtf["interpretation"]
+
+        direction_icons = {
+            "BULLISH": "🟢",
+            "BEARISH": "🔴",
+            "MIXED": "🟡",
+            "UNKNOWN": "⚪",
+        }
+
+        strength_labels = {
+            "STRONG": "🟢 قوی",
+            "MODERATE": "🟡 متوسط",
+            "WEAK": "🟠 ضعیف",
+            "NEUTRAL": "⚪ خنثی",
+        }
+
+        alignment_labels = {
+            "STRONG_BULLISH": "🟢 هم‌جهتی صعودی کامل",
+            "STRONG_BEARISH": "🔴 هم‌جهتی نزولی کامل",
+            "HIGHER_MAIN_ALIGNED": "🟢 ساختار بالاتر و تایم‌فریم اصلی هم‌جهت",
+            "HIGHER_MAIN_CONFLICT": "⚠️ تعارض بین ساختار بالاتر و تایم‌فریم اصلی",
+            "MIXED": "🟡 ساختار ترکیبی",
+        }
+
+        lines = [
+            "📊 Multi-Timeframe Analysis",
+            "",
+            f"🪙 {symbol}/USD",
+            "",
+            "━━ Timeframes ━━",
+            "",
+        ]
 
         for timeframe in ["6h", "1h", "15m"]:
             if timeframe not in analyses:
                 continue
+
             analysis = analyses[timeframe]
             direction = analysis["confluence"]["direction"]
             confidence = analysis["confluence"]["confidence"]
             icon = direction_icons.get(direction, "⚪")
-            lines.append(f"{timeframe_names[timeframe]}: {icon} {direction} | Confidence: {confidence}")
 
-        alignment_labels = {
-            "STRONG_BULLISH": "🟢 هم‌جهتی صعودی قوی",
-            "BULLISH_ALIGNMENT": "🟢 هم‌جهتی صعودی",
-            "STRONG_BEARISH": "🔴 هم‌جهتی نزولی قوی",
-            "BEARISH_ALIGNMENT": "🔴 هم‌جهتی نزولی",
-            "MIXED": "🟡 تایم‌فریم‌ها هم‌جهت نیستند",
-            "UNKNOWN": "⚪ اطلاعات کافی نیست",
-        }
-        lines += ["", "━━ هم‌جهتی بازار ━━", "", alignment_labels.get(result["alignment"], "⚪ وضعیت نامشخص")]
+            if timeframe == "6h":
+                role = "ساختار بالاتر"
+            elif timeframe == "1h":
+                role = "روند اصلی"
+            else:
+                role = "مومنتوم کوتاه‌مدت"
 
-        if result["direction"] == "BULLISH":
-            lines.append("🎯 جهت غالب: 🟢 صعودی")
-        elif result["direction"] == "BEARISH":
-            lines.append("🎯 جهت غالب: 🔴 نزولی")
-        else:
-            lines.append("🎯 جهت غالب: 🟡 مختلط")
+            lines.append(
+                f"{timeframe} | {role}\n"
+                f"{icon} {direction} | Confidence: {confidence}"
+            )
+            lines.append("")
 
-        higher_tf = analyses.get("6h")
-        lower_tf = analyses.get("15m")
-        if higher_tf and lower_tf:
-            higher_direction = higher_tf["confluence"]["direction"]
-            lower_direction = lower_tf["confluence"]["direction"]
-            if higher_direction != lower_direction and higher_direction != "MIXED" and lower_direction != "MIXED":
-                lines += ["", "⚠️ هشدار:", f"ساختار 6h = {higher_direction}", f"حرکت 15m = {lower_direction}", "", "احتمالاً حرکت کوتاه‌مدت خلاف جهت ساختار بالاتر است."]
+        lines.extend([
+            "━━ MTF Structure ━━",
+            "",
+            f"6h: {direction_icons.get(higher_tf_direction, '⚪')} {higher_tf_direction}",
+            f"1h: {direction_icons.get(main_tf_direction, '⚪')} {main_tf_direction}",
+            f"15m: {direction_icons.get(short_tf_direction, '⚪')} {short_tf_direction}",
+            "",
+            f"Weighted Score: {weighted_score:+d}",
+            f"🟢 Bullish Weight: {bullish_score}",
+            f"🔴 Bearish Weight: {bearish_score}",
+            "",
+            "━━ نتیجه ━━",
+            "",
+            f"جهت غالب: {direction_icons.get(overall_direction, '⚪')} {overall_direction}",
+            "",
+            f"قدرت: {strength_labels.get(strength, '⚪')}",
+            "",
+            alignment_labels.get(alignment, "🟡 ساختار ترکیبی"),
+        ])
 
-        await update.message.reply_text("\n".join(lines))
+        if counter_trend:
+            lines.extend([
+                "",
+                "⚠️ Higher-Timeframe Conflict",
+                "",
+                "تایم‌فریم 1h با ساختار 6h هم‌جهت نیست.",
+            ])
+
+        if short_confirmation == "CONFIRMS_HIGHER_TF":
+            lines.extend([
+                "",
+                "✅ 15m ساختار 6h را تأیید می‌کند.",
+            ])
+        elif short_confirmation == "AGAINST_HIGHER_TF":
+            lines.extend([
+                "",
+                "⚠️ 15m خلاف ساختار 6h حرکت می‌کند.",
+            ])
+
+        lines.extend([
+            "",
+            "━━ تفسیر ساختار ━━",
+            "",
+            interpretation,
+        ])
+
+        await update.message.reply_text(
+            "\n".join(lines)
+        )
+
     except Exception as exc:
         print(f"MTF API error: {exc}", flush=True)
-        await update.message.reply_text(f"❌ خطا در تحلیل Multi-Timeframe:\n{exc}")
+        await update.message.reply_text(
+            f"❌ خطا در تحلیل Multi-Timeframe:\n{exc}"
+        )
 
 
 # ====================
