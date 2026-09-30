@@ -239,6 +239,253 @@ def get_bollinger_position(
     return "AT_MIDDLE"
 
 
+# ============================================================
+# MARKET REGIME
+# ============================================================
+
+def detect_market_regime(
+    ema20,
+    ema50,
+    price,
+    bollinger_bandwidth,
+    atr_percent,
+    volume_ratio,
+):
+    """Determine the current market regime. Descriptive, not predictive."""
+
+    if (
+        ema20 is None
+        or ema50 is None
+        or price is None
+    ):
+        return "UNKNOWN"
+
+    if ema20 > ema50 and price > ema20:
+        if (
+            atr_percent is not None
+            and atr_percent >= 1.5
+        ):
+            return "TRENDING_BULLISH"
+        return "BULLISH"
+
+    if ema20 < ema50 and price < ema20:
+        if (
+            atr_percent is not None
+            and atr_percent >= 1.5
+        ):
+            return "TRENDING_BEARISH"
+        return "BEARISH"
+
+    if (
+        atr_percent is not None
+        and atr_percent < 0.7
+    ):
+        return "LOW_VOLATILITY"
+
+    if (
+        atr_percent is not None
+        and atr_percent >= 2.5
+    ):
+        return "HIGH_VOLATILITY"
+
+    if (
+        volume_ratio is not None
+        and volume_ratio >= 1.5
+    ):
+        return "VOLUME_EXPANSION"
+
+    return "RANGING"
+
+
+# ============================================================
+# SIGNAL STRENGTH
+# ============================================================
+
+def calculate_signal_strength(
+    rsi_value,
+    macd_value,
+    signal_value,
+    ema20,
+    ema50,
+    price,
+    bollinger_position,
+    volume_ratio,
+    atr_percent,
+):
+    """Calculate directional confluence as a structured result."""
+
+    bullish = 0
+    bearish = 0
+    factors = []
+
+    # RSI
+    if rsi_value is not None:
+        if rsi_value > 55:
+            bullish += 1
+            factors.append({
+                "name": "RSI",
+                "direction": "BULLISH",
+                "strength": "NORMAL",
+            })
+        elif rsi_value < 45:
+            bearish += 1
+            factors.append({
+                "name": "RSI",
+                "direction": "BEARISH",
+                "strength": "NORMAL",
+            })
+        else:
+            factors.append({
+                "name": "RSI",
+                "direction": "NEUTRAL",
+                "strength": "WEAK",
+            })
+
+    # MACD
+    if (
+        macd_value is not None
+        and signal_value is not None
+    ):
+        if macd_value > signal_value:
+            bullish += 1
+            factors.append({
+                "name": "MACD",
+                "direction": "BULLISH",
+                "strength": "NORMAL",
+            })
+        elif macd_value < signal_value:
+            bearish += 1
+            factors.append({
+                "name": "MACD",
+                "direction": "BEARISH",
+                "strength": "NORMAL",
+            })
+        else:
+            factors.append({
+                "name": "MACD",
+                "direction": "NEUTRAL",
+                "strength": "WEAK",
+            })
+
+    # EMA Structure
+    if (
+        ema20 is not None
+        and ema50 is not None
+        and price is not None
+    ):
+        if ema20 > ema50 and price > ema20:
+            bullish += 2
+            factors.append({
+                "name": "EMA Structure",
+                "direction": "BULLISH",
+                "strength": "STRONG",
+            })
+        elif ema20 < ema50 and price < ema20:
+            bearish += 2
+            factors.append({
+                "name": "EMA Structure",
+                "direction": "BEARISH",
+                "strength": "STRONG",
+            })
+        elif ema20 > ema50:
+            bullish += 1
+            factors.append({
+                "name": "EMA Structure",
+                "direction": "BULLISH",
+                "strength": "NORMAL",
+            })
+        elif ema20 < ema50:
+            bearish += 1
+            factors.append({
+                "name": "EMA Structure",
+                "direction": "BEARISH",
+                "strength": "NORMAL",
+            })
+
+    # Bollinger
+    if bollinger_position == "ABOVE_MIDDLE":
+        bullish += 1
+        factors.append({
+            "name": "Bollinger",
+            "direction": "BULLISH",
+            "strength": "NORMAL",
+        })
+    elif bollinger_position == "BELOW_MIDDLE":
+        bearish += 1
+        factors.append({
+            "name": "Bollinger",
+            "direction": "BEARISH",
+            "strength": "NORMAL",
+        })
+    elif bollinger_position == "ABOVE_UPPER":
+        bullish += 1
+        factors.append({
+            "name": "Bollinger",
+            "direction": "BULLISH",
+            "strength": "EXTENDED",
+        })
+    elif bollinger_position == "BELOW_LOWER":
+        bearish += 1
+        factors.append({
+            "name": "Bollinger",
+            "direction": "BEARISH",
+            "strength": "EXTENDED",
+        })
+
+    # Volume confirmation
+    volume_confirmation = "NONE"
+
+    if volume_ratio is not None:
+        if volume_ratio >= 1.5:
+            volume_confirmation = "STRONG"
+        elif volume_ratio >= 1.0:
+            volume_confirmation = "NORMAL"
+        else:
+            volume_confirmation = "WEAK"
+
+    # Final direction
+    if bullish > bearish:
+        direction = "BULLISH"
+    elif bearish > bullish:
+        direction = "BEARISH"
+    else:
+        direction = "MIXED"
+
+    # Confidence
+    total_points = bullish + bearish
+
+    if total_points == 0:
+        confidence = "LOW"
+    else:
+        dominant = max(bullish, bearish)
+        ratio = dominant / total_points
+
+        if ratio >= 0.75 and dominant >= 5:
+            confidence = "HIGH"
+        elif ratio >= 0.60:
+            confidence = "MODERATE"
+        else:
+            confidence = "LOW"
+
+    # Volume qualification
+    if volume_confirmation == "WEAK":
+        confidence_note = "ضعف حجم؛ حرکت تأیید حجمی ضعیفی دارد."
+    elif volume_confirmation == "STRONG":
+        confidence_note = "حجم بالا؛ حرکت از نظر حجم تأیید بیشتری دارد."
+    else:
+        confidence_note = "تأیید حجمی معمولی."
+
+    return {
+        "bullish_score": bullish,
+        "bearish_score": bearish,
+        "direction": direction,
+        "confidence": confidence,
+        "volume_confirmation": volume_confirmation,
+        "confidence_note": confidence_note,
+        "factors": factors,
+    }
+
+
 # =========================
 # Telegram Commands
 # =========================
@@ -1494,34 +1741,72 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else "N/A"
         )
 
-        # =========================
-        # جمع‌بندی
-        # =========================
+        # ========================================================
+        # Market Regime / Confluence
+        # ========================================================
 
-        bullish_points = 0
-        bearish_points = 0
+        market_regime = detect_market_regime(
+            ema20=ema20,
+            ema50=ema50,
+            price=current_price,
+            bollinger_bandwidth=bollinger["bandwidth"],
+            atr_percent=atr_percent,
+            volume_ratio=volume["ratio"],
+        )
 
-        if rsi_value > 50:
-            bullish_points += 1
-        elif rsi_value < 50:
-            bearish_points += 1
+        confluence = calculate_signal_strength(
+            rsi_value=rsi_value,
+            macd_value=macd_value,
+            signal_value=signal_value,
+            ema20=ema20,
+            ema50=ema50,
+            price=current_price,
+            bollinger_position=bollinger_position,
+            volume_ratio=volume["ratio"],
+            atr_percent=atr_percent,
+        )
 
-        if macd_value > signal_value:
-            bullish_points += 1
-        elif macd_value < signal_value:
-            bearish_points += 1
+        bullish_points = confluence["bullish_score"]
+        bearish_points = confluence["bearish_score"]
+        confluence_direction = confluence["direction"]
+        confidence = confluence["confidence"]
+        volume_confirmation = confluence["volume_confirmation"]
+        confidence_note = confluence["confidence_note"]
 
-        if ema20 > ema50:
-            bullish_points += 1
-        elif ema20 < ema50:
-            bearish_points += 1
+        regime_labels = {
+            "TRENDING_BULLISH": "🟢 روند صعودی",
+            "BULLISH": "🟢 تمایل صعودی",
+            "TRENDING_BEARISH": "🔴 روند نزولی",
+            "BEARISH": "🔴 تمایل نزولی",
+            "LOW_VOLATILITY": "🟡 نوسان پایین",
+            "HIGH_VOLATILITY": "🟠 نوسان بالا",
+            "VOLUME_EXPANSION": "🟣 افزایش حجم",
+            "RANGING": "🟡 بازار رنج",
+            "UNKNOWN": "⚪ نامشخص",
+        }
 
-        if bullish_points > bearish_points:
-            overall = "🟢 تمایل صعودی"
-        elif bearish_points > bullish_points:
-            overall = "🔴 تمایل نزولی"
+        regime_text = regime_labels.get(
+            market_regime,
+            "⚪ نامشخص"
+        )
+
+        confidence_labels = {
+            "HIGH": "🟢 بالا",
+            "MODERATE": "🟡 متوسط",
+            "LOW": "🔴 پایین",
+        }
+
+        confidence_text = confidence_labels.get(
+            confidence,
+            "⚪ نامشخص"
+        )
+
+        if confluence_direction == "BULLISH":
+            direction_text = "🟢 تمایل صعودی"
+        elif confluence_direction == "BEARISH":
+            direction_text = "🔴 تمایل نزولی"
         else:
-            overall = "🟡 وضعیت ترکیبی"
+            direction_text = "🟡 وضعیت ترکیبی"
 
         message = (
             f"📊 تحلیل ترکیبی بازار\n\n"
@@ -1568,10 +1853,16 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"کراس EMA: {ema_cross_status}\n"
             f"کراس MACD: {macd_cross_status}\n\n"
 
-            f"━━ جمع‌بندی ━━\n"
-            f"🟢 عوامل صعودی: {bullish_points}\n"
-            f"🔴 عوامل نزولی: {bearish_points}\n\n"
-            f"وضعیت کلی: {overall}"
+            f"━━ Market Regime ━━\n"
+            f"{regime_text}\n\n"
+
+            f"━━ Confluence ━━\n"
+            f"🟢 امتیاز صعودی: {bullish_points}\n"
+            f"🔴 امتیاز نزولی: {bearish_points}\n"
+            f"جهت: {direction_text}\n"
+            f"Confidence: {confidence_text}\n\n"
+            f"📦 تأیید حجم: {volume_confirmation}\n"
+            f"{confidence_note}"
         )
 
         await update.message.reply_text(message)
