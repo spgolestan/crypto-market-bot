@@ -1877,6 +1877,244 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ در تحلیل بازار خطایی رخ داد."
         )
+# ============================================================
+# Multi-Timeframe Analysis Engine
+# ============================================================
+
+SUPPORTED_SYMBOLS = {
+    "BTC": "BTC-USD",
+    "ETH": "ETH-USD",
+}
+
+TIMEFRAME_GRANULARITIES = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3600,
+    "6h": 21600,
+    "1d": 86400,
+}
+
+
+def get_granularity(timeframe):
+    return TIMEFRAME_GRANULARITIES.get(timeframe)
+
+
+async def fetch_candles(product_id, granularity):
+    url = f"https://api.exchange.coinbase.com/products/{product_id}/candles"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                url,
+                params={"granularity": granularity},
+                headers={"Accept": "application/json"},
+            )
+            response.raise_for_status()
+            data = response.json()
+        data.sort(key=lambda x: x[0])
+        return [
+            {"time": int(x[0]), "low": float(x[1]), "high": float(x[2]),
+             "open": float(x[3]), "close": float(x[4]), "volume": float(x[5])}
+            for x in data
+        ]
+    except Exception as exc:
+        print(f"Fetch candles error: {exc}", flush=True)
+        return []
+
+
+def _ema_series(values, period):
+    if len(values) < period:
+        return []
+    multiplier = 2 / (period + 1)
+    ema = sum(values[:period]) / period
+    result = [ema]
+    for value in values[period:]:
+        ema = (value - ema) * multiplier + ema
+        result.append(ema)
+    return result
+
+
+def _ema_value(values, period):
+    series = _ema_series(values, period)
+    return series[-1] if series else None
+
+
+def _rsi_value(closes, period=14):
+    if len(closes) < period + 1:
+        return None
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        change = closes[i] - closes[i - 1]
+        gains.append(change if change > 0 else 0)
+        losses.append(abs(change) if change < 0 else 0)
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for i in range(period, len(gains)):
+        avg_gain = ((avg_gain * (period - 1)) + gains[i]) / period
+        avg_loss = ((avg_loss * (period - 1)) + losses[i]) / period
+    if avg_loss == 0:
+        return 100.0
+    return 100 - (100 / (1 + avg_gain / avg_loss))
+
+
+def _macd_current(closes):
+    ema12 = _ema_series(closes, 12)
+    ema26 = _ema_series(closes, 26)
+    if not ema12 or not ema26:
+        return None, None
+    ema12_aligned = ema12[14:]
+    if len(ema12_aligned) < len(ema26):
+        return None, None
+    macd = [ema12_aligned[i] - ema26[i] for i in range(len(ema26))]
+    signal = _ema_series(macd, 9)
+    if not signal:
+        return None, None
+    return macd[-1], signal[-1]
+
+
+def analyze_market(candles, symbol, timeframe):
+    """تحلیل یک تایم‌فریم برای استفاده در MTF."""
+    if len(candles) < 60:
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "confluence": {
+                "bullish_score": 0,
+                "bearish_score": 0,
+                "direction": "MIXED",
+                "confidence": "LOW",
+                "volume_confirmation": "NONE",
+                "confidence_note": "داده کافی نیست.",
+                "factors": [],
+            },
+        }
+
+    closes = [c["close"] for c in candles]
+    price = closes[-1]
+    ema20 = _ema_value(closes, 20)
+    ema50 = _ema_value(closes, 50)
+    rsi_value = _rsi_value(closes)
+    macd_value, signal_value = _macd_current(closes)
+    bollinger = calculate_bollinger_bands(closes, 20, 2)
+    bollinger_position = get_bollinger_position(
+        price, bollinger["lower"], bollinger["middle"], bollinger["upper"]
+    )
+    atr_value = calculate_atr(candles, 14)
+    atr_percent = (atr_value / price * 100) if atr_value is not None and price else None
+    volume = calculate_volume_analysis(candles, 20)
+
+    regime = detect_market_regime(
+        ema20, ema50, price, bollinger["bandwidth"], atr_percent, volume["ratio"]
+    )
+    confluence = calculate_signal_strength(
+        rsi_value, macd_value, signal_value, ema20, ema50, price,
+        bollinger_position, volume["ratio"], atr_percent
+    )
+
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "price": price,
+        "market_regime": regime,
+        "confluence": confluence,
+    }
+
+
+async def analyze_multi_timeframe(symbol):
+    """15m = کوتاه‌مدت، 1h = روند اصلی، 6h = ساختار بالاتر."""
+    symbol = symbol.upper()
+    timeframes = ["15m", "1h", "6h"]
+    analyses = {}
+
+    if symbol not in SUPPORTED_SYMBOLS:
+        return {"analyses": {}, "alignment": "UNKNOWN", "alignment_score": 0, "direction": "UNKNOWN"}
+
+    for timeframe in timeframes:
+        granularity = get_granularity(timeframe)
+        candles = await fetch_candles(SUPPORTED_SYMBOLS[symbol], granularity)
+        if candles:
+            analyses[timeframe] = analyze_market(candles, symbol, timeframe)
+
+    if len(analyses) < 3:
+        return {"analyses": analyses, "alignment": "UNKNOWN", "alignment_score": 0, "direction": "UNKNOWN"}
+
+    directions = {tf: analyses[tf]["confluence"]["direction"] for tf in timeframes}
+    bullish_count = sum(d == "BULLISH" for d in directions.values())
+    bearish_count = sum(d == "BEARISH" for d in directions.values())
+
+    if bullish_count == 3:
+        alignment, direction, score = "STRONG_BULLISH", "BULLISH", 3
+    elif bearish_count == 3:
+        alignment, direction, score = "STRONG_BEARISH", "BEARISH", 3
+    elif bullish_count >= 2:
+        alignment, direction, score = "BULLISH_ALIGNMENT", "BULLISH", 2
+    elif bearish_count >= 2:
+        alignment, direction, score = "BEARISH_ALIGNMENT", "BEARISH", 2
+    else:
+        alignment, direction, score = "MIXED", "MIXED", 1
+
+    return {
+        "analyses": analyses,
+        "alignment": alignment,
+        "alignment_score": score,
+        "direction": direction,
+        "directions": directions,
+    }
+
+
+async def mtf_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    symbol = "BTC"
+    try:
+        result = await analyze_multi_timeframe(symbol)
+        analyses = result["analyses"]
+        if not analyses:
+            await update.message.reply_text("❌ داده‌ای برای تحلیل چندتایم‌فریمی دریافت نشد.")
+            return
+
+        timeframe_names = {"15m": "15 دقیقه", "1h": "1 ساعت", "6h": "6 ساعت"}
+        direction_icons = {"BULLISH": "🟢", "BEARISH": "🔴", "MIXED": "🟡", "UNKNOWN": "⚪"}
+        lines = ["📊 تحلیل Multi-Timeframe", "", "🪙 BTC/USD", "", "━━ تایم‌فریم‌ها ━━", ""]
+
+        for timeframe in ["6h", "1h", "15m"]:
+            if timeframe not in analyses:
+                continue
+            analysis = analyses[timeframe]
+            direction = analysis["confluence"]["direction"]
+            confidence = analysis["confluence"]["confidence"]
+            icon = direction_icons.get(direction, "⚪")
+            lines.append(f"{timeframe_names[timeframe]}: {icon} {direction} | Confidence: {confidence}")
+
+        alignment_labels = {
+            "STRONG_BULLISH": "🟢 هم‌جهتی صعودی قوی",
+            "BULLISH_ALIGNMENT": "🟢 هم‌جهتی صعودی",
+            "STRONG_BEARISH": "🔴 هم‌جهتی نزولی قوی",
+            "BEARISH_ALIGNMENT": "🔴 هم‌جهتی نزولی",
+            "MIXED": "🟡 تایم‌فریم‌ها هم‌جهت نیستند",
+            "UNKNOWN": "⚪ اطلاعات کافی نیست",
+        }
+        lines += ["", "━━ هم‌جهتی بازار ━━", "", alignment_labels.get(result["alignment"], "⚪ وضعیت نامشخص")]
+
+        if result["direction"] == "BULLISH":
+            lines.append("🎯 جهت غالب: 🟢 صعودی")
+        elif result["direction"] == "BEARISH":
+            lines.append("🎯 جهت غالب: 🔴 نزولی")
+        else:
+            lines.append("🎯 جهت غالب: 🟡 مختلط")
+
+        higher_tf = analyses.get("6h")
+        lower_tf = analyses.get("15m")
+        if higher_tf and lower_tf:
+            higher_direction = higher_tf["confluence"]["direction"]
+            lower_direction = lower_tf["confluence"]["direction"]
+            if higher_direction != lower_direction and higher_direction != "MIXED" and lower_direction != "MIXED":
+                lines += ["", "⚠️ هشدار:", f"ساختار 6h = {higher_direction}", f"حرکت 15m = {lower_direction}", "", "احتمالاً حرکت کوتاه‌مدت خلاف جهت ساختار بالاتر است."]
+
+        await update.message.reply_text("\n".join(lines))
+    except Exception as exc:
+        print(f"MTF API error: {exc}", flush=True)
+        await update.message.reply_text(f"❌ خطا در تحلیل Multi-Timeframe:\n{exc}")
+
+
 # ====================
 # ANALYS
 # ====================
@@ -2417,6 +2655,9 @@ async def start_telegram():
     )
     telegram_application.add_handler(
         CommandHandler("cross", cross)
+    )
+    telegram_application.add_handler(
+        CommandHandler("mtf", mtf_command)
     )
     await telegram_application.initialize()
 
