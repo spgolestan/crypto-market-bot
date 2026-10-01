@@ -1044,18 +1044,18 @@ def detect_retest(candles, break_event):
     }
 def find_last_break_event(candles, market_structure):
     """
-    Find the most recent BOS or CHOCH event
-    inside the candle history.
+    Find the most recent BOS or CHOCH event from candle history.
 
-    Four possible cases:
+    The structure is evaluated according to the swings that existed
+    at the time of the break, not according to the current structure.
+
+    Cases:
 
     BULLISH + break above Swing High -> Bullish BOS
     BULLISH + break below Swing Low  -> Bearish CHOCH
 
     BEARISH + break below Swing Low  -> Bearish BOS
     BEARISH + break above Swing High -> Bullish CHOCH
-
-    MIXED -> No structure-based BOS/CHOCH
     """
 
     if len(candles) < 5:
@@ -1064,21 +1064,13 @@ def find_last_break_event(candles, market_structure):
     swing_highs = market_structure.get("swing_highs", [])
     swing_lows = market_structure.get("swing_lows", [])
 
-    overall_structure = market_structure.get(
-        "overall_structure",
-        "MIXED"
-    )
-
     if not swing_highs and not swing_lows:
         return None
-
-    latest_high = swing_highs[-1] if swing_highs else None
-    latest_low = swing_lows[-1] if swing_lows else None
 
     last_closed_index = len(candles) - 2
 
     # --------------------------------------------------------
-    # از جدیدترین کندل بسته‌شده به سمت گذشته حرکت می‌کنیم
+    # بررسی ساختار در زمان هر شکست
     # --------------------------------------------------------
 
     for i in range(last_closed_index, 1, -1):
@@ -1086,109 +1078,183 @@ def find_last_break_event(candles, market_structure):
         current_close = float(candles[i]["close"])
         previous_close = float(candles[i - 1]["close"])
 
+        # ----------------------------------------------------
+        # Swingهایی که تا قبل از کندل شکست شکل گرفته‌اند
+        # ----------------------------------------------------
+
+        highs_before = [
+            swing
+            for swing in swing_highs
+            if swing["index"] < i
+        ]
+
+        lows_before = [
+            swing
+            for swing in swing_lows
+            if swing["index"] < i
+        ]
+
+        # حداقل دو Swing برای تشخیص ساختار لازم داریم
+        if len(highs_before) < 2 and len(lows_before) < 2:
+            continue
+
+        # ----------------------------------------------------
+        # تشخیص ساختار تاریخی
+        # ----------------------------------------------------
+
+        bullish_score = 0
+        bearish_score = 0
+
+        # آخرین دو Swing High
+        if len(highs_before) >= 2:
+
+            previous_high = highs_before[-2]
+            latest_high = highs_before[-1]
+
+            if latest_high["price"] > previous_high["price"]:
+                bullish_score += 1
+
+            elif latest_high["price"] < previous_high["price"]:
+                bearish_score += 1
+
+        else:
+            latest_high = None
+
+        # آخرین دو Swing Low
+        if len(lows_before) >= 2:
+
+            previous_low = lows_before[-2]
+            latest_low = lows_before[-1]
+
+            if latest_low["price"] > previous_low["price"]:
+                bullish_score += 1
+
+            elif latest_low["price"] < previous_low["price"]:
+                bearish_score += 1
+
+        else:
+            latest_low = None
+
+        # ----------------------------------------------------
+        # تعیین ساختار در زمان شکست
+        # ----------------------------------------------------
+
+        if bullish_score > bearish_score:
+            structure_at_break = "BULLISH"
+
+        elif bearish_score > bullish_score:
+            structure_at_break = "BEARISH"
+
+        else:
+            structure_at_break = "MIXED"
+
         # ====================================================
         # BULLISH STRUCTURE
         # ====================================================
 
-        if overall_structure == "BULLISH":
+        if structure_at_break == "BULLISH":
 
             # ------------------------------------------------
             # Bullish BOS
-            # شکست Swing High به سمت بالا
+            # شکست آخرین Swing High
             # ------------------------------------------------
 
             if latest_high:
 
                 level = float(latest_high["price"])
 
-                if latest_high["index"] < i:
+                if (
+                    previous_close <= level
+                    and current_close > level
+                ):
 
-                    if previous_close <= level and current_close > level:
-
-                        return {
-                            "bos": True,
-                            "choch": False,
-                            "direction": "BULLISH",
-                            "broken_level": latest_high,
-                            "break_index": i,
-                            "break_price": current_close,
-                            "break_time": candles[i].get("time"),
-                        }
+                    return {
+                        "bos": True,
+                        "choch": False,
+                        "direction": "BULLISH",
+                        "broken_level": latest_high,
+                        "break_index": i,
+                        "break_price": current_close,
+                        "break_time": candles[i].get("time"),
+                    }
 
             # ------------------------------------------------
             # Bearish CHOCH
-            # شکست Swing Low به سمت پایین
+            # شکست آخرین Swing Low
             # ------------------------------------------------
 
             if latest_low:
 
                 level = float(latest_low["price"])
 
-                if latest_low["index"] < i:
+                if (
+                    previous_close >= level
+                    and current_close < level
+                ):
 
-                    if previous_close >= level and current_close < level:
-
-                        return {
-                            "bos": False,
-                            "choch": True,
-                            "direction": "BEARISH",
-                            "broken_level": latest_low,
-                            "break_index": i,
-                            "break_price": current_close,
-                            "break_time": candles[i].get("time"),
-                        }
+                    return {
+                        "bos": False,
+                        "choch": True,
+                        "direction": "BEARISH",
+                        "broken_level": latest_low,
+                        "break_index": i,
+                        "break_price": current_close,
+                        "break_time": candles[i].get("time"),
+                    }
 
         # ====================================================
         # BEARISH STRUCTURE
         # ====================================================
 
-        if overall_structure == "BEARISH":
+        elif structure_at_break == "BEARISH":
 
             # ------------------------------------------------
             # Bearish BOS
-            # شکست Swing Low به سمت پایین
+            # شکست آخرین Swing Low
             # ------------------------------------------------
 
             if latest_low:
 
                 level = float(latest_low["price"])
 
-                if latest_low["index"] < i:
+                if (
+                    previous_close >= level
+                    and current_close < level
+                ):
 
-                    if previous_close >= level and current_close < level:
-
-                        return {
-                            "bos": True,
-                            "choch": False,
-                            "direction": "BEARISH",
-                            "broken_level": latest_low,
-                            "break_index": i,
-                            "break_price": current_close,
-                            "break_time": candles[i].get("time"),
-                        }
+                    return {
+                        "bos": True,
+                        "choch": False,
+                        "direction": "BEARISH",
+                        "broken_level": latest_low,
+                        "break_index": i,
+                        "break_price": current_close,
+                        "break_time": candles[i].get("time"),
+                    }
 
             # ------------------------------------------------
             # Bullish CHOCH
-            # شکست Swing High به سمت بالا
+            # شکست آخرین Swing High
             # ------------------------------------------------
 
             if latest_high:
 
                 level = float(latest_high["price"])
 
-                if latest_high["index"] < i:
+                if (
+                    previous_close <= level
+                    and current_close > level
+                ):
 
-                    if previous_close <= level and current_close > level:
-
-                        return {
-                            "bos": False,
-                            "choch": True,
-                            "direction": "BULLISH",
-                            "broken_level": latest_high,
-                            "break_index": i,
-                            "break_price": current_close,
-                            "break_time": candles[i].get("time"),
-                        }
+                    return {
+                        "bos": False,
+                        "choch": True,
+                        "direction": "BULLISH",
+                        "broken_level": latest_high,
+                        "break_index": i,
+                        "break_price": current_close,
+                        "break_time": candles[i].get("time"),
+                    }
 
     return None
 # =========================
