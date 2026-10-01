@@ -493,10 +493,10 @@ def calculate_signal_strength(
 # ============================================================
 
 def detect_swing_points(
-candles,
-left_bars=2,
-right_bars=2
-):
+    candles,
+    left_bars=2,
+    right_bars=2
+    ):
 """
 Detect swing highs and swing lows.
 
