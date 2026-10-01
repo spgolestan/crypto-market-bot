@@ -497,16 +497,16 @@ def detect_swing_points(
     left_bars=2,
     right_bars=2
     ):
-"""
-Detect swing highs and swing lows.
+    """
+    Detect swing highs and swing lows.
 
-```
-A swing high is a candle whose high is higher
-than the highs of the surrounding candles.
+    ```
+    A swing high is a candle whose high is higher
+    than the highs of the surrounding candles.
 
-A swing low is a candle whose low is lower
-than the lows of the surrounding candles.
-"""
+    A swing low is a candle whose low is lower
+    than the lows of the surrounding candles.
+    """
 
 swing_highs = []
 swing_lows = []
