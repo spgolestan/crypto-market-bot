@@ -585,20 +585,20 @@ return {
 }
 
 def classify_swing_structure(swing_points):
-"""
-Classify swing points as:
+    """
+    Classify swing points as:
 
-```
-Highs:
-    HH = Higher High
-    LH = Lower High
-    EH = Equal High
+    ```
+    Highs:
+        HH = Higher High
+        LH = Lower High
+        EH = Equal High
 
-Lows:
-    HL = Higher Low
-    LL = Lower Low
-    EL = Equal Low
-"""
+    Lows:
+        HL = Higher Low
+        LL = Lower Low
+        EL = Equal Low
+    """
 
 swing_highs = swing_points["swing_highs"]
 swing_lows = swing_points["swing_lows"]
