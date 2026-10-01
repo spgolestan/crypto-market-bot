@@ -689,6 +689,88 @@ def analyze_market_structure(candles, swing_left=2, swing_right=2):
         "bearish_score": bearish_score,
         "overall_structure": overall_structure
     }
+def detect_bos(candles, market_structure):
+    """
+    Detect Break of Structure (BOS)
+    using the latest confirmed closed candle.
+    """
+
+    if len(candles) < 2:
+        return {
+            "bos": False,
+            "direction": None,
+            "broken_level": None,
+            "break_index": None
+        }
+
+    swing_highs = market_structure.get("swing_highs", [])
+    swing_lows = market_structure.get("swing_lows", [])
+
+    if not swing_highs and not swing_lows:
+        return {
+            "bos": False,
+            "direction": None,
+            "broken_level": None,
+            "break_index": None
+        }
+
+    # آخرین کندل بسته‌شده
+    break_index = len(candles) - 2
+    closed_candle = candles[break_index]
+
+    close_price = float(closed_candle["close"])
+
+    latest_high = swing_highs[-1] if swing_highs else None
+    latest_low = swing_lows[-1] if swing_lows else None
+
+    bullish_bos = False
+    bearish_bos = False
+
+    broken_high = None
+    broken_low = None
+
+    # =========================
+    # Bullish BOS
+    # =========================
+    if latest_high:
+        if close_price > latest_high["price"]:
+            bullish_bos = True
+            broken_high = latest_high
+
+    # =========================
+    # Bearish BOS
+    # =========================
+    if latest_low:
+        if close_price < latest_low["price"]:
+            bearish_bos = True
+            broken_low = latest_low
+
+    # =========================
+    # نتیجه
+    # =========================
+
+    if bullish_bos and not bearish_bos:
+        return {
+            "bos": True,
+            "direction": "BULLISH",
+            "broken_level": broken_high,
+            "break_index": break_index
+        }
+
+    if bearish_bos and not bullish_bos:
+        return {
+            "bos": True,
+            "direction": "BEARISH",
+            "broken_level": broken_low,
+            "break_index": break_index
+        }
+
+    return {
+        "bos": False,
+        "direction": None,
+        "broken_level": None,
+        "break_index": break_index
+    }
 # =========================
 # Telegram Commands
 # =========================
