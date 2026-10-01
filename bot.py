@@ -1042,6 +1042,95 @@ def detect_retest(candles, break_event):
         "retest_price": None,
         "retest_time": None,
     }
+def find_last_break_event(candles, market_structure):
+    """
+    Find the most recent BOS or CHOCH event
+    inside the candle history.
+
+    This allows Retest detection to work even when
+    the break happened several candles ago.
+    """
+
+    if len(candles) < 5:
+        return None
+
+    swing_highs = market_structure.get("swing_highs", [])
+    swing_lows = market_structure.get("swing_lows", [])
+
+    overall_structure = market_structure.get(
+        "overall_structure",
+        "MIXED"
+    )
+
+    if not swing_highs and not swing_lows:
+        return None
+
+    # --------------------------------------------------------
+    # آخرین Swing High / Low
+    # --------------------------------------------------------
+
+    latest_high = swing_highs[-1] if swing_highs else None
+    latest_low = swing_lows[-1] if swing_lows else None
+
+    # آخرین کندل بسته‌شده
+    last_closed_index = len(candles) - 2
+
+    # --------------------------------------------------------
+    # از نزدیک‌ترین کندل به عقب حرکت می‌کنیم
+    # --------------------------------------------------------
+
+    for i in range(last_closed_index, 1, -1):
+
+        current_close = float(candles[i]["close"])
+        previous_close = float(candles[i - 1]["close"])
+
+        # ====================================================
+        # BULLISH STRUCTURE
+        # ====================================================
+
+        if overall_structure == "BULLISH" and latest_high:
+
+            level = float(latest_high["price"])
+
+            if latest_high["index"] < i:
+
+                # شکست جدید به سمت بالا
+                if previous_close <= level and current_close > level:
+
+                    return {
+                        "bos": True,
+                        "choch": False,
+                        "direction": "BULLISH",
+                        "broken_level": latest_high,
+                        "break_index": i,
+                        "break_price": current_close,
+                        "break_time": candles[i].get("time"),
+                    }
+
+        # ====================================================
+        # BEARISH STRUCTURE
+        # ====================================================
+
+        if overall_structure == "BEARISH" and latest_low:
+
+            level = float(latest_low["price"])
+
+            if latest_low["index"] < i:
+
+                # شکست جدید به سمت پایین
+                if previous_close >= level and current_close < level:
+
+                    return {
+                        "bos": True,
+                        "choch": False,
+                        "direction": "BEARISH",
+                        "broken_level": latest_low,
+                        "break_index": i,
+                        "break_price": current_close,
+                        "break_time": candles[i].get("time"),
+                    }
+
+    return None
 # =========================
 # Telegram Commands
 # =========================
