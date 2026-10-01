@@ -901,6 +901,147 @@ def detect_choch(candles, market_structure):
         "break_price": None,
         "break_time": None,
     }
+def detect_retest(candles, break_event):
+    """
+    Detect Retest after a confirmed BOS or CHOCH.
+
+    Logic:
+
+    Bullish break:
+        Price breaks above a level
+        Then later returns to that level
+        -> Bullish Retest
+
+    Bearish break:
+        Price breaks below a level
+        Then later returns to that level
+        -> Bearish Retest
+
+    Retest is detected using the candle's HIGH/LOW
+    touching the broken level.
+
+    The break candle itself is ignored.
+    """
+
+    if len(candles) < 4:
+        return {
+            "retest": False,
+            "direction": None,
+            "level": None,
+            "retest_index": None,
+            "retest_price": None,
+            "retest_time": None,
+        }
+
+    if not break_event:
+        return {
+            "retest": False,
+            "direction": None,
+            "level": None,
+            "retest_index": None,
+            "retest_price": None,
+            "retest_time": None,
+        }
+
+    # --------------------------------------------------------
+    # آیا BOS یا CHOCH داریم؟
+    # --------------------------------------------------------
+
+    is_bos = break_event.get("bos", False)
+    is_choch = break_event.get("choch", False)
+
+    if not is_bos and not is_choch:
+        return {
+            "retest": False,
+            "direction": None,
+            "level": None,
+            "retest_index": None,
+            "retest_price": None,
+            "retest_time": None,
+        }
+
+    direction = break_event.get("direction")
+    broken_level = break_event.get("broken_level")
+
+    if not broken_level:
+        return {
+            "retest": False,
+            "direction": None,
+            "level": None,
+            "retest_index": None,
+            "retest_price": None,
+            "retest_time": None,
+        }
+
+    level = float(broken_level["price"])
+
+    break_index = break_event.get("break_index")
+
+    if break_index is None:
+        return {
+            "retest": False,
+            "direction": None,
+            "level": level,
+            "retest_index": None,
+            "retest_price": None,
+            "retest_time": None,
+        }
+
+    # --------------------------------------------------------
+    # بررسی کندل‌های بعد از شکست
+    # --------------------------------------------------------
+
+    for i in range(break_index + 1, len(candles) - 1):
+
+        candle = candles[i]
+
+        high = float(candle["high"])
+        low = float(candle["low"])
+
+        # ----------------------------------------------------
+        # Bullish Retest
+        # ----------------------------------------------------
+
+        if direction == "BULLISH":
+
+            # قیمت از بالا به سطح شکسته‌شده برمی‌گردد
+            if low <= level <= high:
+
+                return {
+                    "retest": True,
+                    "direction": "BULLISH",
+                    "level": level,
+                    "retest_index": i,
+                    "retest_price": level,
+                    "retest_time": candle.get("time"),
+                }
+
+        # ----------------------------------------------------
+        # Bearish Retest
+        # ----------------------------------------------------
+
+        elif direction == "BEARISH":
+
+            # قیمت از پایین به سطح شکسته‌شده برمی‌گردد
+            if low <= level <= high:
+
+                return {
+                    "retest": True,
+                    "direction": "BEARISH",
+                    "level": level,
+                    "retest_index": i,
+                    "retest_price": level,
+                    "retest_time": candle.get("time"),
+                }
+
+    return {
+        "retest": False,
+        "direction": None,
+        "level": level,
+        "retest_index": None,
+        "retest_price": None,
+        "retest_time": None,
+    }
 # =========================
 # Telegram Commands
 # =========================
