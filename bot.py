@@ -484,6 +484,309 @@ def calculate_signal_strength(
         "confidence_note": confidence_note,
         "factors": factors,
     }
+# ============================================================
+
+# MARKET STRUCTURE
+
+# Swing Detection + HH / HL / LH / LL
+
+# ============================================================
+
+def detect_swing_points(
+candles,
+left_bars=2,
+right_bars=2
+):
+"""
+Detect swing highs and swing lows.
+
+```
+A swing high is a candle whose high is higher
+than the highs of the surrounding candles.
+
+A swing low is a candle whose low is lower
+than the lows of the surrounding candles.
+"""
+
+swing_highs = []
+swing_lows = []
+
+if len(candles) < left_bars + right_bars + 1:
+    return {
+        "swing_highs": [],
+        "swing_lows": [],
+    }
+
+for i in range(
+    left_bars,
+    len(candles) - right_bars
+):
+
+    current = candles[i]
+
+    current_high = current["high"]
+    current_low = current["low"]
+
+    # =========================
+    # Swing High
+    # =========================
+
+    is_swing_high = True
+
+    for j in range(
+        i - left_bars,
+        i + right_bars + 1
+    ):
+
+        if j == i:
+            continue
+
+        if candles[j]["high"] >= current_high:
+            is_swing_high = False
+            break
+
+    if is_swing_high:
+
+        swing_highs.append({
+            "index": i,
+            "time": current.get("time"),
+            "price": current_high,
+        })
+
+    # =========================
+    # Swing Low
+    # =========================
+
+    is_swing_low = True
+
+    for j in range(
+        i - left_bars,
+        i + right_bars + 1
+    ):
+
+        if j == i:
+            continue
+
+        if candles[j]["low"] <= current_low:
+            is_swing_low = False
+            break
+
+    if is_swing_low:
+
+        swing_lows.append({
+            "index": i,
+            "time": current.get("time"),
+            "price": current_low,
+        })
+
+return {
+    "swing_highs": swing_highs,
+    "swing_lows": swing_lows,
+}
+```
+
+def classify_swing_structure(swing_points):
+"""
+Classify swing points as:
+
+```
+Highs:
+    HH = Higher High
+    LH = Lower High
+    EH = Equal High
+
+Lows:
+    HL = Higher Low
+    LL = Lower Low
+    EL = Equal Low
+"""
+
+swing_highs = swing_points["swing_highs"]
+swing_lows = swing_points["swing_lows"]
+
+classified_highs = []
+classified_lows = []
+
+# =========================
+# Classify Highs
+# =========================
+
+previous_high = None
+
+for swing in swing_highs:
+
+    if previous_high is None:
+
+        classification = "FIRST_HIGH"
+
+    elif swing["price"] > previous_high["price"]:
+
+        classification = "HH"
+
+    elif swing["price"] < previous_high["price"]:
+
+        classification = "LH"
+
+    else:
+
+        classification = "EH"
+
+    classified_highs.append({
+        **swing,
+        "classification": classification,
+    })
+
+    previous_high = swing
+
+# =========================
+# Classify Lows
+# =========================
+
+previous_low = None
+
+for swing in swing_lows:
+
+    if previous_low is None:
+
+        classification = "FIRST_LOW"
+
+    elif swing["price"] > previous_low["price"]:
+
+        classification = "HL"
+
+    elif swing["price"] < previous_low["price"]:
+
+        classification = "LL"
+
+    else:
+
+        classification = "EL"
+
+    classified_lows.append({
+        **swing,
+        "classification": classification,
+    })
+
+    previous_low = swing
+
+return {
+    "highs": classified_highs,
+    "lows": classified_lows,
+}
+
+def analyze_market_structure(
+candles,
+swing_left=2,
+swing_right=2
+):
+"""
+Analyze current market structure using swing points.
+
+```
+This stage only detects:
+    HH / HL / LH / LL
+
+BOS / CHOCH are intentionally not included yet.
+"""
+
+swing_points = detect_swing_points(
+    candles,
+    left_bars=swing_left,
+    right_bars=swing_right
+)
+
+structure = classify_swing_structure(
+    swing_points
+)
+
+highs = structure["highs"]
+lows = structure["lows"]
+
+latest_high = (
+    highs[-1]
+    if highs
+    else None
+)
+
+previous_high = (
+    highs[-2]
+    if len(highs) >= 2
+    else None
+)
+
+latest_low = (
+    lows[-1]
+    if lows
+    else None
+)
+
+previous_low = (
+    lows[-2]
+    if len(lows) >= 2
+    else None
+)
+
+recent_highs = highs[-3:]
+recent_lows = lows[-3:]
+
+bullish_score = 0
+bearish_score = 0
+
+# =========================
+# Recent High Structure
+# =========================
+
+for high in recent_highs:
+
+    if high["classification"] == "HH":
+        bullish_score += 1
+
+    elif high["classification"] == "LH":
+        bearish_score += 1
+
+# =========================
+# Recent Low Structure
+# =========================
+
+for low in recent_lows:
+
+    if low["classification"] == "HL":
+        bullish_score += 1
+
+    elif low["classification"] == "LL":
+        bearish_score += 1
+
+# =========================
+# Overall Structure
+# =========================
+
+if bullish_score > bearish_score:
+
+    overall_structure = "BULLISH"
+
+elif bearish_score > bullish_score:
+
+    overall_structure = "BEARISH"
+
+else:
+
+    overall_structure = "MIXED"
+
+return {
+    "swing_highs": highs,
+    "swing_lows": lows,
+
+    "latest_high": latest_high,
+    "previous_high": previous_high,
+
+    "latest_low": latest_low,
+    "previous_low": previous_low,
+
+    "bullish_score": bullish_score,
+    "bearish_score": bearish_score,
+
+    "overall_structure": overall_structure,
+}     
 
 
 # =========================
@@ -1310,6 +1613,27 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             for candle in data
         ]
+        # ========================================================
+        # Market Structure
+        # Swing Detection + HH / HL / LH / LL
+        # ========================================================
+
+        market_structure = analyze_market_structure(
+            candles=[
+                {
+                    "time": int(candle[0]),
+                    "open": float(candle[3]),
+                    "high": float(candle[2]),
+                    "low": float(candle[1]),
+                    "close": float(candle[4]),
+                    "volume": float(candle[5]),
+                }
+                for candle in data
+            ],
+            swing_left=2,
+            swing_right=2
+        )
+
 
         bollinger = calculate_bollinger_bands(
             closes,
@@ -1807,6 +2131,24 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             direction_text = "🔴 تمایل نزولی"
         else:
             direction_text = "🟡 وضعیت ترکیبی"
+        latest_high = market_structure["latest_high"]
+        latest_low = market_structure["latest_low"]
+    
+        if latest_high:
+            latest_high_text = (
+                f"{latest_high['classification']} "
+                f"@ {latest_high['price']:,.2f}"
+            )
+        else:
+            latest_high_text = "N/A"
+    
+        if latest_low:
+            latest_low_text = (
+                f"{latest_low['classification']} "
+                f"@ {latest_low['price']:,.2f}"
+            )
+        else:
+            latest_low_text = "N/A"   
 
         message = (
             f"📊 تحلیل ترکیبی بازار\n\n"
@@ -1849,12 +2191,18 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"EMA50: ${ema50:,.2f}\n"
             f"{ema_status}\n"
             f"{price_status}\n\n"
-            
+
             f"کراس EMA: {ema_cross_status}\n"
             f"کراس MACD: {macd_cross_status}\n\n"
-
+    
+            f"━━ Market Structure ━━\n"
+            f"ساختار کلی: {market_structure['overall_structure']}\n"
+            f"🟢 امتیاز صعودی ساختار: {market_structure['bullish_score']}\n"
+            f"🔴 امتیاز نزولی ساختار: {market_structure['bearish_score']}\n"
+            f"High اخیر: {latest_high_text}\n"
+            f"Low اخیر: {latest_low_text}\n\n"
+    
             f"━━ Market Regime ━━\n"
-            f"{regime_text}\n\n"
 
             f"━━ Confluence ━━\n"
             f"🟢 امتیاز صعودی: {bullish_points}\n"
