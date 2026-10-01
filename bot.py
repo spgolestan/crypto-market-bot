@@ -674,19 +674,19 @@ return {
 }
 
 def analyze_market_structure(
-candles,
-swing_left=2,
-swing_right=2
-):
-"""
-Analyze current market structure using swing points.
-
-```
-This stage only detects:
-    HH / HL / LH / LL
-
-BOS / CHOCH are intentionally not included yet.
-"""
+    candles,
+    swing_left=2,
+    swing_right=2
+    ):
+    """
+    Analyze current market structure using swing points.
+    
+    ```
+    This stage only detects:
+        HH / HL / LH / LL
+    
+    BOS / CHOCH are intentionally not included yet.
+    """
 
 swing_points = detect_swing_points(
     candles,
