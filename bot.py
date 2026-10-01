@@ -901,118 +901,121 @@ def detect_choch(candles, market_structure):
         "break_price": None,
         "break_time": None,
     }
-def detect_retest(candles, break_event, min_move_percent=0.15, max_bars=20):
+def detect_retest(
+    candles,
+    break_event,
+    atr_period=14,
+    atr_multiplier=0.5,
+    max_bars=20
+):
     """
-    Detect a more valid Retest after a confirmed BOS or CHOCH.
+    Detect Retest using ATR-based departure.
 
     Logic:
 
-    Bullish break:
-        1. Price breaks above the level.
-        2. Price moves sufficiently ABOVE the level.
-        3. Price later returns to the broken level.
-        4. The return must happen within max_bars candles.
+    Bullish:
+        Break above level
+        -> price moves at least ATR * multiplier above level
+        -> price returns to level
+        -> candle closes at or above level
 
-    Bearish break:
-        1. Price breaks below the level.
-        2. Price moves sufficiently BELOW the level.
-        3. Price later returns to the broken level.
-        4. The return must happen within max_bars candles.
+    Bearish:
+        Break below level
+        -> price moves at least ATR * multiplier below level
+        -> price returns to level
+        -> candle closes at or below level
 
     The break candle itself is ignored.
     The current open candle is ignored.
     """
 
-    if len(candles) < 4:
-        return {
-            "retest": False,
-            "direction": None,
-            "level": None,
-            "retest_index": None,
-            "retest_price": None,
-            "retest_time": None,
-            "bars_since_break": None,
-        }
+    empty_result = {
+        "retest": False,
+        "direction": None,
+        "level": None,
+        "retest_index": None,
+        "retest_price": None,
+        "retest_time": None,
+        "bars_since_break": None,
+        "atr": None,
+        "departure_distance": None,
+    }
+
+    if len(candles) < atr_period + 3:
+        return empty_result
 
     if not break_event:
-        return {
-            "retest": False,
-            "direction": None,
-            "level": None,
-            "retest_index": None,
-            "retest_price": None,
-            "retest_time": None,
-            "bars_since_break": None,
-        }
+        return empty_result
 
     is_bos = break_event.get("bos", False)
     is_choch = break_event.get("choch", False)
 
     if not is_bos and not is_choch:
-        return {
-            "retest": False,
-            "direction": None,
-            "level": None,
-            "retest_index": None,
-            "retest_price": None,
-            "retest_time": None,
-            "bars_since_break": None,
-        }
+        return empty_result
 
     direction = break_event.get("direction")
     broken_level = break_event.get("broken_level")
     break_index = break_event.get("break_index")
 
     if not broken_level or break_index is None:
-        return {
-            "retest": False,
-            "direction": None,
-            "level": None,
-            "retest_index": None,
-            "retest_price": None,
-            "retest_time": None,
-            "bars_since_break": None,
-        }
+        return empty_result
 
     level = float(broken_level["price"])
-
-    # --------------------------------------------------------
-    # Search only closed candles after the break
-    # --------------------------------------------------------
 
     last_closed_index = len(candles) - 2
 
     if break_index >= last_closed_index:
         return {
-            "retest": False,
+            **empty_result,
             "direction": direction,
             "level": level,
-            "retest_index": None,
-            "retest_price": None,
-            "retest_time": None,
-            "bars_since_break": None,
         }
 
-    # --------------------------------------------------------
-    # Limit how far after the break we search
-    # --------------------------------------------------------
+    # ========================================================
+    # ATR Calculation
+    # ========================================================
+
+    true_ranges = []
+
+    for i in range(1, len(candles)):
+
+        current_high = float(candles[i]["high"])
+        current_low = float(candles[i]["low"])
+        previous_close = float(candles[i - 1]["close"])
+
+        tr = max(
+            current_high - current_low,
+            abs(current_high - previous_close),
+            abs(current_low - previous_close)
+        )
+
+        true_ranges.append(tr)
+
+    if len(true_ranges) < atr_period:
+        return {
+            **empty_result,
+            "direction": direction,
+            "level": level,
+        }
+
+    atr = sum(true_ranges[-atr_period:]) / atr_period
+
+    departure_distance = atr * atr_multiplier
+
+    # ========================================================
+    # Search Window
+    # ========================================================
 
     search_end = min(
         last_closed_index,
         break_index + max_bars
     )
 
-    # --------------------------------------------------------
-    # Minimum distance price must travel away from level
-    # --------------------------------------------------------
-
-    min_move = level * (min_move_percent / 100.0)
-
     departure_confirmed = False
 
-    # --------------------------------------------------------
+    # ========================================================
     # Bullish Retest
-    # --------------------------------------------------------
+    # ========================================================
 
     if direction == "BULLISH":
 
@@ -1026,26 +1029,26 @@ def detect_retest(candles, break_event, min_move_percent=0.15, max_bars=20):
 
             # --------------------------------------------
             # Step 1:
-            # Price must first move sufficiently above level
+            # Price must move sufficiently above level
             # --------------------------------------------
 
             if not departure_confirmed:
 
-                if high >= level + min_move:
+                if high >= level + departure_distance:
                     departure_confirmed = True
                     continue
 
             # --------------------------------------------
             # Step 2:
-            # After moving away, price returns to the level
+            # Price returns to broken level
             # --------------------------------------------
 
             if departure_confirmed:
 
                 if low <= level <= high:
 
-                    # Avoid counting a candle that closes
-                    # completely below the broken level.
+                    # Valid bullish retest:
+                    # candle must close at or above level.
                     if close >= level:
 
                         return {
@@ -1056,23 +1059,23 @@ def detect_retest(candles, break_event, min_move_percent=0.15, max_bars=20):
                             "retest_price": level,
                             "retest_time": candle.get("time"),
                             "bars_since_break": i - break_index,
+                            "atr": atr,
+                            "departure_distance": departure_distance,
                         }
 
-                    # If price closes below the level,
-                    # the bullish retest has failed.
+                    # Close below broken level:
+                    # bullish retest is invalid.
                     return {
-                        "retest": False,
+                        **empty_result,
                         "direction": None,
                         "level": level,
-                        "retest_index": None,
-                        "retest_price": None,
-                        "retest_time": None,
-                        "bars_since_break": None,
+                        "atr": atr,
+                        "departure_distance": departure_distance,
                     }
 
-    # --------------------------------------------------------
+    # ========================================================
     # Bearish Retest
-    # --------------------------------------------------------
+    # ========================================================
 
     elif direction == "BEARISH":
 
@@ -1086,26 +1089,26 @@ def detect_retest(candles, break_event, min_move_percent=0.15, max_bars=20):
 
             # --------------------------------------------
             # Step 1:
-            # Price must first move sufficiently below level
+            # Price must move sufficiently below level
             # --------------------------------------------
 
             if not departure_confirmed:
 
-                if low <= level - min_move:
+                if low <= level - departure_distance:
                     departure_confirmed = True
                     continue
 
             # --------------------------------------------
             # Step 2:
-            # After moving away, price returns to the level
+            # Price returns to broken level
             # --------------------------------------------
 
             if departure_confirmed:
 
                 if low <= level <= high:
 
-                    # Avoid counting a candle that closes
-                    # completely above the broken level.
+                    # Valid bearish retest:
+                    # candle must close at or below level.
                     if close <= level:
 
                         return {
@@ -1116,32 +1119,26 @@ def detect_retest(candles, break_event, min_move_percent=0.15, max_bars=20):
                             "retest_price": level,
                             "retest_time": candle.get("time"),
                             "bars_since_break": i - break_index,
+                            "atr": atr,
+                            "departure_distance": departure_distance,
                         }
 
-                    # If price closes above the level,
-                    # the bearish retest has failed.
+                    # Close above broken level:
+                    # bearish retest is invalid.
                     return {
-                        "retest": False,
+                        **empty_result,
                         "direction": None,
                         "level": level,
-                        "retest_index": None,
-                        "retest_price": None,
-                        "retest_time": None,
-                        "bars_since_break": None,
+                        "atr": atr,
+                        "departure_distance": departure_distance,
                     }
 
-    # --------------------------------------------------------
-    # No valid Retest
-    # --------------------------------------------------------
-
     return {
-        "retest": False,
-        "direction": None,
+        **empty_result,
+        "direction": direction,
         "level": level,
-        "retest_index": None,
-        "retest_price": None,
-        "retest_time": None,
-        "bars_since_break": None,
+        "atr": atr,
+        "departure_distance": departure_distance,
     }
 def find_last_break_event(candles, market_structure):
     """
@@ -2866,18 +2863,26 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if retest_event["retest"]:
         
             bars_since_break = retest_event.get("bars_since_break")
+            atr = retest_event.get("atr")
+            departure_distance = retest_event.get("departure_distance")
         
             if retest_event["direction"] == "BULLISH":
+        
                 retest_text = (
                     f"🟢 Retest صعودی\n"
                     f"سطح: {retest_event['level']:,.2f}\n"
+                    f"ATR: {atr:,.2f}\n"
+                    f"فاصله لازم: {departure_distance:,.2f}\n"
                     f"فاصله از Break: {bars_since_break} کندل"
                 )
         
             elif retest_event["direction"] == "BEARISH":
+        
                 retest_text = (
                     f"🔴 Retest نزولی\n"
                     f"سطح: {retest_event['level']:,.2f}\n"
+                    f"ATR: {atr:,.2f}\n"
+                    f"فاصله لازم: {departure_distance:,.2f}\n"
                     f"فاصله از Break: {bars_since_break} کندل"
                 )
         
