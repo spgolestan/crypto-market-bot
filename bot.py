@@ -2071,6 +2071,29 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
             market_structure=market_structure
         )
+        # ========================================================
+        # Find Last BOS / CHOCH for Retest
+        # ========================================================
+        
+        last_break_event = find_last_break_event(
+            candles=[
+                {
+                    "time": int(candle[0]),
+                    "open": float(candle[3]),
+                    "high": float(candle[2]),
+                    "low": float(candle[1]),
+                    "close": float(candle[4]),
+                    "volume": float(candle[5]),
+                }
+                for candle in data
+            ],
+            market_structure=market_structure
+        )
+        
+        # ========================================================
+        # Retest Detection
+        # ========================================================
+        
         retest_event = detect_retest(
             candles=[
                 {
@@ -2083,9 +2106,8 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 }
                 for candle in data
             ],
-            break_event=bos if bos["bos"] else choch
+            break_event=last_break_event
         )
-
         bollinger = calculate_bollinger_bands(
             closes,
             period=20,
