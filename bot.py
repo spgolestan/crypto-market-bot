@@ -1860,6 +1860,24 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
             market_structure=market_structure
         )
+        # ========================================================
+        # CHOCH Detection
+        # ========================================================
+
+        choch = detect_choch(
+            candles=[
+                {
+                    "time": int(candle[0]),
+                    "open": float(candle[3]),
+                    "high": float(candle[2]),
+                    "low": float(candle[1]),
+                    "close": float(candle[4]),
+                    "volume": float(candle[5]),
+                }
+                for candle in data
+            ],
+            market_structure=market_structure
+        )
         bollinger = calculate_bollinger_bands(
             closes,
             period=20,
@@ -2419,6 +2437,31 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         else:
             bos_text = "⚪ BOS شناسایی نشد"
+        # ========================================================
+        # CHOCH Display
+        # ========================================================
+
+        if choch["choch"]:
+
+            if choch["direction"] == "BULLISH":
+                choch_text = (
+                    f"🟢 CHOCH صعودی\n"
+                    f"شکست سطح: "
+                    f"{choch['broken_level']['price']:,.2f}"
+                )
+
+            elif choch["direction"] == "BEARISH":
+                choch_text = (
+                    f"🔴 CHOCH نزولی\n"
+                    f"شکست سطح: "
+                    f"{choch['broken_level']['price']:,.2f}"
+                )
+
+            else:
+                choch_text = "⚪ CHOCH شناسایی نشد"
+
+        else:
+            choch_text = "⚪ CHOCH شناسایی نشد"
         message = (
             f"📊 تحلیل ترکیبی بازار\n\n"
             f"🪙 {symbol}/USD\n"
@@ -2476,6 +2519,8 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{recent_lows_display}\n\n"
             f"━━ Break of Structure ━━\n"
             f"{bos_text}\n\n"
+            f"━━ Change of Character ━━\n"
+            f"{choch_text}\n\n"
 
     
             f"━━ Market Regime ━━\n"
