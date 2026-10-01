@@ -1922,6 +1922,21 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
             market_structure=market_structure
         )
+        retest_event = detect_retest(
+            candles=[
+                {
+                    "time": int(candle[0]),
+                    "open": float(candle[3]),
+                    "high": float(candle[2]),
+                    "low": float(candle[1]),
+                    "close": float(candle[4]),
+                    "volume": float(candle[5]),
+                }
+                for candle in data
+            ],
+            break_event=bos if bos["bos"] else choch
+        )
+
         bollinger = calculate_bollinger_bands(
             closes,
             period=20,
@@ -2506,6 +2521,29 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         else:
             choch_text = "⚪ CHOCH شناسایی نشد"
+        # ========================================================
+        # Retest Display
+        # ========================================================
+        
+        if retest_event["retest"]:
+        
+            if retest_event["direction"] == "BULLISH":
+                retest_text = (
+                    f"🟢 Retest صعودی\n"
+                    f"سطح: {retest_event['level']:,.2f}"
+                )
+        
+            elif retest_event["direction"] == "BEARISH":
+                retest_text = (
+                    f"🔴 Retest نزولی\n"
+                    f"سطح: {retest_event['level']:,.2f}"
+                )
+        
+            else:
+                retest_text = "⚪ Retest شناسایی نشد"
+        
+        else:
+            retest_text = "⚪ Retest شناسایی نشد"
         message = (
             f"📊 تحلیل ترکیبی بازار\n\n"
             f"🪙 {symbol}/USD\n"
@@ -2565,6 +2603,9 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{bos_text}\n\n"
             f"━━ Change of Character ━━\n"
             f"{choch_text}\n\n"
+            f"━━ Retest ━━\n"
+            f"{retest_text}\n\n"
+
 
     
             f"━━ Market Regime ━━\n"
