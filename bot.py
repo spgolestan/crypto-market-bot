@@ -492,302 +492,203 @@ def calculate_signal_strength(
 
 # ============================================================
 
-def detect_swing_points(
-    candles,
-    left_bars=2,
-    right_bars=2
-    ):
-    """
-    Detect swing highs and swing lows.
+def detect_swing_points(candles, left_bars=2, right_bars=2):
+    swing_highs = []
+    swing_lows = []
 
-    ```
-    A swing high is a candle whose high is higher
-    than the highs of the surrounding candles.
+    if len(candles) < left_bars + right_bars + 1:
+        return {
+            "swing_highs": [],
+            "swing_lows": []
+        }
 
-    A swing low is a candle whose low is lower
-    than the lows of the surrounding candles.
-    """
+    for i in range(left_bars, len(candles) - right_bars):
+        current = candles[i]
 
-swing_highs = []
-swing_lows = []
+        current_high = current["high"]
+        current_low = current["low"]
 
-if len(candles) < left_bars + right_bars + 1:
+        # =========================
+        # Swing High
+        # =========================
+        is_swing_high = True
+
+        for j in range(i - left_bars, i + right_bars + 1):
+            if j == i:
+                continue
+
+            if candles[j]["high"] >= current_high:
+                is_swing_high = False
+                break
+
+        if is_swing_high:
+            swing_highs.append({
+                "index": i,
+                "time": current.get("time"),
+                "price": current_high
+            })
+
+        # =========================
+        # Swing Low
+        # =========================
+        is_swing_low = True
+
+        for j in range(i - left_bars, i + right_bars + 1):
+            if j == i:
+                continue
+
+            if candles[j]["low"] <= current_low:
+                is_swing_low = False
+                break
+
+        if is_swing_low:
+            swing_lows.append({
+                "index": i,
+                "time": current.get("time"),
+                "price": current_low
+            })
+
     return {
-        "swing_highs": [],
-        "swing_lows": [],
+        "swing_highs": swing_highs,
+        "swing_lows": swing_lows
     }
 
-for i in range(
-    left_bars,
-    len(candles) - right_bars
-):
-
-    current = candles[i]
-
-    current_high = current["high"]
-    current_low = current["low"]
-
-    # =========================
-    # Swing High
-    # =========================
-
-    is_swing_high = True
-
-    for j in range(
-        i - left_bars,
-        i + right_bars + 1
-    ):
-
-        if j == i:
-            continue
-
-        if candles[j]["high"] >= current_high:
-            is_swing_high = False
-            break
-
-    if is_swing_high:
-
-        swing_highs.append({
-            "index": i,
-            "time": current.get("time"),
-            "price": current_high,
-        })
-
-    # =========================
-    # Swing Low
-    # =========================
-
-    is_swing_low = True
-
-    for j in range(
-        i - left_bars,
-        i + right_bars + 1
-    ):
-
-        if j == i:
-            continue
-
-        if candles[j]["low"] <= current_low:
-            is_swing_low = False
-            break
-
-    if is_swing_low:
-
-        swing_lows.append({
-            "index": i,
-            "time": current.get("time"),
-            "price": current_low,
-        })
-
-return {
-    "swing_highs": swing_highs,
-    "swing_lows": swing_lows,
-}
 
 def classify_swing_structure(swing_points):
-    """
-    Classify swing points as:
+    swing_highs = swing_points["swing_highs"]
+    swing_lows = swing_points["swing_lows"]
 
-    ```
-    Highs:
-        HH = Higher High
-        LH = Lower High
-        EH = Equal High
+    classified_highs = []
+    classified_lows = []
 
-    Lows:
-        HL = Higher Low
-        LL = Lower Low
-        EL = Equal Low
-    """
+    # =========================
+    # Classify Highs
+    # =========================
+    previous_high = None
 
-swing_highs = swing_points["swing_highs"]
-swing_lows = swing_points["swing_lows"]
+    for swing in swing_highs:
 
-classified_highs = []
-classified_lows = []
+        if previous_high is None:
+            classification = "FIRST_HIGH"
 
-# =========================
-# Classify Highs
-# =========================
+        elif swing["price"] > previous_high["price"]:
+            classification = "HH"
 
-previous_high = None
+        elif swing["price"] < previous_high["price"]:
+            classification = "LH"
 
-for swing in swing_highs:
+        else:
+            classification = "EH"
 
-    if previous_high is None:
+        classified_highs.append({
+            **swing,
+            "classification": classification
+        })
 
-        classification = "FIRST_HIGH"
+        previous_high = swing
 
-    elif swing["price"] > previous_high["price"]:
+    # =========================
+    # Classify Lows
+    # =========================
+    previous_low = None
 
-        classification = "HH"
+    for swing in swing_lows:
 
-    elif swing["price"] < previous_high["price"]:
+        if previous_low is None:
+            classification = "FIRST_LOW"
 
-        classification = "LH"
+        elif swing["price"] > previous_low["price"]:
+            classification = "HL"
+
+        elif swing["price"] < previous_low["price"]:
+            classification = "LL"
+
+        else:
+            classification = "EL"
+
+        classified_lows.append({
+            **swing,
+            "classification": classification
+        })
+
+        previous_low = swing
+
+    return {
+        "highs": classified_highs,
+        "lows": classified_lows
+    }
+
+
+def analyze_market_structure(candles, swing_left=2, swing_right=2):
+
+    swing_points = detect_swing_points(
+        candles,
+        left_bars=swing_left,
+        right_bars=swing_right
+    )
+
+    structure = classify_swing_structure(swing_points)
+
+    highs = structure["highs"]
+    lows = structure["lows"]
+
+    latest_high = highs[-1] if highs else None
+    previous_high = highs[-2] if len(highs) >= 2 else None
+
+    latest_low = lows[-1] if lows else None
+    previous_low = lows[-2] if len(lows) >= 2 else None
+
+    recent_highs = highs[-3:]
+    recent_lows = lows[-3:]
+
+    bullish_score = 0
+    bearish_score = 0
+
+    # =========================
+    # High Structure Score
+    # =========================
+    for high in recent_highs:
+
+        if high["classification"] == "HH":
+            bullish_score += 1
+
+        elif high["classification"] == "LH":
+            bearish_score += 1
+
+    # =========================
+    # Low Structure Score
+    # =========================
+    for low in recent_lows:
+
+        if low["classification"] == "HL":
+            bullish_score += 1
+
+        elif low["classification"] == "LL":
+            bearish_score += 1
+
+    # =========================
+    # Overall Structure
+    # =========================
+    if bullish_score > bearish_score:
+        overall_structure = "BULLISH"
+
+    elif bearish_score > bullish_score:
+        overall_structure = "BEARISH"
 
     else:
+        overall_structure = "MIXED"
 
-        classification = "EH"
-
-    classified_highs.append({
-        **swing,
-        "classification": classification,
-    })
-
-    previous_high = swing
-
-# =========================
-# Classify Lows
-# =========================
-
-previous_low = None
-
-for swing in swing_lows:
-
-    if previous_low is None:
-
-        classification = "FIRST_LOW"
-
-    elif swing["price"] > previous_low["price"]:
-
-        classification = "HL"
-
-    elif swing["price"] < previous_low["price"]:
-
-        classification = "LL"
-
-    else:
-
-        classification = "EL"
-
-    classified_lows.append({
-        **swing,
-        "classification": classification,
-    })
-
-    previous_low = swing
-
-return {
-    "highs": classified_highs,
-    "lows": classified_lows,
-}
-
-def analyze_market_structure(
-    candles,
-    swing_left=2,
-    swing_right=2
-    ):
-    """
-    Analyze current market structure using swing points.
-    
-    ```
-    This stage only detects:
-        HH / HL / LH / LL
-    
-    BOS / CHOCH are intentionally not included yet.
-    """
-
-swing_points = detect_swing_points(
-    candles,
-    left_bars=swing_left,
-    right_bars=swing_right
-)
-
-structure = classify_swing_structure(
-    swing_points
-)
-
-highs = structure["highs"]
-lows = structure["lows"]
-
-latest_high = (
-    highs[-1]
-    if highs
-    else None
-)
-
-previous_high = (
-    highs[-2]
-    if len(highs) >= 2
-    else None
-)
-
-latest_low = (
-    lows[-1]
-    if lows
-    else None
-)
-
-previous_low = (
-    lows[-2]
-    if len(lows) >= 2
-    else None
-)
-
-recent_highs = highs[-3:]
-recent_lows = lows[-3:]
-
-bullish_score = 0
-bearish_score = 0
-
-# =========================
-# Recent High Structure
-# =========================
-
-for high in recent_highs:
-
-    if high["classification"] == "HH":
-        bullish_score += 1
-
-    elif high["classification"] == "LH":
-        bearish_score += 1
-
-# =========================
-# Recent Low Structure
-# =========================
-
-for low in recent_lows:
-
-    if low["classification"] == "HL":
-        bullish_score += 1
-
-    elif low["classification"] == "LL":
-        bearish_score += 1
-
-# =========================
-# Overall Structure
-# =========================
-
-if bullish_score > bearish_score:
-
-    overall_structure = "BULLISH"
-
-elif bearish_score > bullish_score:
-
-    overall_structure = "BEARISH"
-
-else:
-
-    overall_structure = "MIXED"
-
-return {
-    "swing_highs": highs,
-    "swing_lows": lows,
-
-    "latest_high": latest_high,
-    "previous_high": previous_high,
-
-    "latest_low": latest_low,
-    "previous_low": previous_low,
-
-    "bullish_score": bullish_score,
-    "bearish_score": bearish_score,
-
-    "overall_structure": overall_structure,
-}     
-
-
+    return {
+        "swing_highs": highs,
+        "swing_lows": lows,
+        "latest_high": latest_high,
+        "previous_high": previous_high,
+        "latest_low": latest_low,
+        "previous_low": previous_low,
+        "bullish_score": bullish_score,
+        "bearish_score": bearish_score,
+        "overall_structure": overall_structure
+    }
 # =========================
 # Telegram Commands
 # =========================
