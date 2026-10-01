@@ -583,7 +583,6 @@ return {
     "swing_highs": swing_highs,
     "swing_lows": swing_lows,
 }
-```
 
 def classify_swing_structure(swing_points):
 """
