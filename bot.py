@@ -1615,8 +1615,24 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             swing_left=2,
             swing_right=2
         )
+        # ========================================================
+        # BOS Detection
+        # ========================================================
 
-
+        bos = detect_bos(
+            candles=[
+                {
+                    "time": int(candle[0]),
+                    "open": float(candle[3]),
+                    "high": float(candle[2]),
+                    "low": float(candle[1]),
+                    "close": float(candle[4]),
+                    "volume": float(candle[5]),
+                }
+                for candle in data
+            ],
+            market_structure=market_structure
+        )
         bollinger = calculate_bollinger_bands(
             closes,
             period=20,
@@ -2154,7 +2170,28 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         recent_highs_display = "\n".join(recent_highs_text) if recent_highs_text else "N/A"
         recent_lows_display = "\n".join(recent_lows_text) if recent_lows_text else "N/A"
+        # ========================================================
+        # BOS Display
+        # ========================================================
 
+        if bos["bos"]:
+            if bos["direction"] == "BULLISH":
+                bos_text = (
+                    f"🟢 BOS صعودی\n"
+                    f"شکست سطح: {bos['broken_level']['price']:,.2f}"
+                )
+
+            elif bos["direction"] == "BEARISH":
+                bos_text = (
+                    f"🔴 BOS نزولی\n"
+                    f"شکست سطح: {bos['broken_level']['price']:,.2f}"
+                )
+
+            else:
+                bos_text = "⚪ BOS شناسایی نشد"
+
+        else:
+            bos_text = "⚪ BOS شناسایی نشد"
         message = (
             f"📊 تحلیل ترکیبی بازار\n\n"
             f"🪙 {symbol}/USD\n"
@@ -2210,6 +2247,9 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             f"🔻 Swing Lows:\n"
             f"{recent_lows_display}\n\n"
+            f"━━ Break of Structure ━━\n"
+            f"{bos_text}\n\n"
+
     
             f"━━ Market Regime ━━\n"
 
