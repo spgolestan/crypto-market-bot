@@ -692,16 +692,149 @@ def analyze_market_structure(candles, swing_left=2, swing_right=2):
 def detect_bos(candles, market_structure):
     """
     Detect Break of Structure (BOS)
-    using the latest confirmed closed candle.
+    using confirmed swing levels and the latest closed candle.
     """
 
-    if len(candles) < 2:
+    if len(candles) < 3:
         return {
             "bos": False,
             "direction": None,
             "broken_level": None,
-            "break_index": None
+            "break_index": None,
         }
+
+    swing_highs = market_structure.get("swing_highs", [])
+    swing_lows = market_structure.get("swing_lows", [])
+
+    if not swing_highs and not swing_lows:
+        return {
+            "bos": False,
+            "direction": None,
+            "broken_level": None,
+            "break_index": len(candles) - 2,
+        }
+
+    # ========================================================
+    # آخرین کندل بسته‌شده
+    # ========================================================
+
+    break_index = len(candles) - 2
+    closed_candle = candles[break_index]
+
+    close_price = float(closed_candle["close"])
+
+    # ========================================================
+    # آخرین Swing های تأیید شده
+    # ========================================================
+
+    latest_high = swing_highs[-1] if swing_highs else None
+    latest_low = swing_lows[-1] if swing_lows else None
+
+    bullish_bos = False
+    bearish_bos = False
+
+    broken_high = None
+    broken_low = None
+
+    # ========================================================
+    # Bullish BOS
+    # Close باید بالاتر از آخرین Swing High باشد
+    # ========================================================
+
+    if latest_high:
+
+        # Swing باید قبل از کندل شکست تشکیل شده باشد
+        if latest_high["index"] < break_index:
+
+            if close_price > latest_high["price"]:
+
+                bullish_bos = True
+                broken_high = latest_high
+
+    # ========================================================
+    # Bearish BOS
+    # Close باید پایین‌تر از آخرین Swing Low باشد
+    # ========================================================
+
+    if latest_low:
+
+        # Swing باید قبل از کندل شکست تشکیل شده باشد
+        if latest_low["index"] < break_index:
+
+            if close_price < latest_low["price"]:
+
+                bearish_bos = True
+                broken_low = latest_low
+
+    # ========================================================
+    # اگر هر دو اتفاق افتاده باشند
+    # ========================================================
+
+    if bullish_bos and bearish_bos:
+
+        # فاصله Swing تا کندل شکست را مقایسه می‌کنیم
+        high_distance = (
+            break_index - broken_high["index"]
+        )
+
+        low_distance = (
+            break_index - broken_low["index"]
+        )
+
+        if high_distance < low_distance:
+
+            return {
+                "bos": True,
+                "direction": "BULLISH",
+                "broken_level": broken_high,
+                "break_index": break_index,
+            }
+
+        else:
+
+            return {
+                "bos": True,
+                "direction": "BEARISH",
+                "broken_level": broken_low,
+                "break_index": break_index,
+            }
+
+    # ========================================================
+    # Bullish BOS
+    # ========================================================
+
+    if bullish_bos:
+
+        return {
+            "bos": True,
+            "direction": "BULLISH",
+            "broken_level": broken_high,
+            "break_index": break_index,
+        }
+
+    # ========================================================
+    # Bearish BOS
+    # ========================================================
+
+    if bearish_bos:
+
+        return {
+            "bos": True,
+            "direction": "BEARISH",
+            "broken_level": broken_low,
+            "break_index": break_index,
+        }
+
+    # ========================================================
+    # No BOS
+    # ========================================================
+
+    return {
+        "bos": False,
+        "direction": None,
+        "broken_level": None,
+        "break_index": break_index,
+    }
 
     swing_highs = market_structure.get("swing_highs", [])
     swing_lows = market_structure.get("swing_lows", [])
