@@ -901,26 +901,26 @@ def detect_choch(candles, market_structure):
         "break_price": None,
         "break_time": None,
     }
-def detect_retest(candles, break_event):
+def detect_retest(candles, break_event, min_move_percent=0.15, max_bars=20):
     """
-    Detect Retest after a confirmed BOS or CHOCH.
+    Detect a more valid Retest after a confirmed BOS or CHOCH.
 
     Logic:
 
     Bullish break:
-        Price breaks above a level
-        Then later returns to that level
-        -> Bullish Retest
+        1. Price breaks above the level.
+        2. Price moves sufficiently ABOVE the level.
+        3. Price later returns to the broken level.
+        4. The return must happen within max_bars candles.
 
     Bearish break:
-        Price breaks below a level
-        Then later returns to that level
-        -> Bearish Retest
-
-    Retest is detected using the candle's HIGH/LOW
-    touching the broken level.
+        1. Price breaks below the level.
+        2. Price moves sufficiently BELOW the level.
+        3. Price later returns to the broken level.
+        4. The return must happen within max_bars candles.
 
     The break candle itself is ignored.
+    The current open candle is ignored.
     """
 
     if len(candles) < 4:
@@ -931,6 +931,7 @@ def detect_retest(candles, break_event):
             "retest_index": None,
             "retest_price": None,
             "retest_time": None,
+            "bars_since_break": None,
         }
 
     if not break_event:
@@ -941,11 +942,8 @@ def detect_retest(candles, break_event):
             "retest_index": None,
             "retest_price": None,
             "retest_time": None,
+            "bars_since_break": None,
         }
-
-    # --------------------------------------------------------
-    # آیا BOS یا CHOCH داریم؟
-    # --------------------------------------------------------
 
     is_bos = break_event.get("bos", False)
     is_choch = break_event.get("choch", False)
@@ -958,12 +956,14 @@ def detect_retest(candles, break_event):
             "retest_index": None,
             "retest_price": None,
             "retest_time": None,
+            "bars_since_break": None,
         }
 
     direction = break_event.get("direction")
     broken_level = break_event.get("broken_level")
+    break_index = break_event.get("break_index")
 
-    if not broken_level:
+    if not broken_level or break_index is None:
         return {
             "retest": False,
             "direction": None,
@@ -971,68 +971,168 @@ def detect_retest(candles, break_event):
             "retest_index": None,
             "retest_price": None,
             "retest_time": None,
+            "bars_since_break": None,
         }
 
     level = float(broken_level["price"])
 
-    break_index = break_event.get("break_index")
+    # --------------------------------------------------------
+    # Search only closed candles after the break
+    # --------------------------------------------------------
 
-    if break_index is None:
+    last_closed_index = len(candles) - 2
+
+    if break_index >= last_closed_index:
         return {
             "retest": False,
-            "direction": None,
+            "direction": direction,
             "level": level,
             "retest_index": None,
             "retest_price": None,
             "retest_time": None,
+            "bars_since_break": None,
         }
 
     # --------------------------------------------------------
-    # بررسی کندل‌های بعد از شکست
+    # Limit how far after the break we search
     # --------------------------------------------------------
 
-    for i in range(break_index + 1, len(candles) - 1):
+    search_end = min(
+        last_closed_index,
+        break_index + max_bars
+    )
 
-        candle = candles[i]
+    # --------------------------------------------------------
+    # Minimum distance price must travel away from level
+    # --------------------------------------------------------
 
-        high = float(candle["high"])
-        low = float(candle["low"])
+    min_move = level * (min_move_percent / 100.0)
 
-        # ----------------------------------------------------
-        # Bullish Retest
-        # ----------------------------------------------------
+    departure_confirmed = False
 
-        if direction == "BULLISH":
+    # --------------------------------------------------------
+    # Bullish Retest
+    # --------------------------------------------------------
 
-            # قیمت از بالا به سطح شکسته‌شده برمی‌گردد
-            if low <= level <= high:
+    if direction == "BULLISH":
 
-                return {
-                    "retest": True,
-                    "direction": "BULLISH",
-                    "level": level,
-                    "retest_index": i,
-                    "retest_price": level,
-                    "retest_time": candle.get("time"),
-                }
+        for i in range(break_index + 1, search_end + 1):
 
-        # ----------------------------------------------------
-        # Bearish Retest
-        # ----------------------------------------------------
+            candle = candles[i]
 
-        elif direction == "BEARISH":
+            high = float(candle["high"])
+            low = float(candle["low"])
+            close = float(candle["close"])
 
-            # قیمت از پایین به سطح شکسته‌شده برمی‌گردد
-            if low <= level <= high:
+            # --------------------------------------------
+            # Step 1:
+            # Price must first move sufficiently above level
+            # --------------------------------------------
 
-                return {
-                    "retest": True,
-                    "direction": "BEARISH",
-                    "level": level,
-                    "retest_index": i,
-                    "retest_price": level,
-                    "retest_time": candle.get("time"),
-                }
+            if not departure_confirmed:
+
+                if high >= level + min_move:
+                    departure_confirmed = True
+                    continue
+
+            # --------------------------------------------
+            # Step 2:
+            # After moving away, price returns to the level
+            # --------------------------------------------
+
+            if departure_confirmed:
+
+                if low <= level <= high:
+
+                    # Avoid counting a candle that closes
+                    # completely below the broken level.
+                    if close >= level:
+
+                        return {
+                            "retest": True,
+                            "direction": "BULLISH",
+                            "level": level,
+                            "retest_index": i,
+                            "retest_price": level,
+                            "retest_time": candle.get("time"),
+                            "bars_since_break": i - break_index,
+                        }
+
+                    # If price closes below the level,
+                    # the bullish retest has failed.
+                    return {
+                        "retest": False,
+                        "direction": None,
+                        "level": level,
+                        "retest_index": None,
+                        "retest_price": None,
+                        "retest_time": None,
+                        "bars_since_break": None,
+                    }
+
+    # --------------------------------------------------------
+    # Bearish Retest
+    # --------------------------------------------------------
+
+    elif direction == "BEARISH":
+
+        for i in range(break_index + 1, search_end + 1):
+
+            candle = candles[i]
+
+            high = float(candle["high"])
+            low = float(candle["low"])
+            close = float(candle["close"])
+
+            # --------------------------------------------
+            # Step 1:
+            # Price must first move sufficiently below level
+            # --------------------------------------------
+
+            if not departure_confirmed:
+
+                if low <= level - min_move:
+                    departure_confirmed = True
+                    continue
+
+            # --------------------------------------------
+            # Step 2:
+            # After moving away, price returns to the level
+            # --------------------------------------------
+
+            if departure_confirmed:
+
+                if low <= level <= high:
+
+                    # Avoid counting a candle that closes
+                    # completely above the broken level.
+                    if close <= level:
+
+                        return {
+                            "retest": True,
+                            "direction": "BEARISH",
+                            "level": level,
+                            "retest_index": i,
+                            "retest_price": level,
+                            "retest_time": candle.get("time"),
+                            "bars_since_break": i - break_index,
+                        }
+
+                    # If price closes above the level,
+                    # the bearish retest has failed.
+                    return {
+                        "retest": False,
+                        "direction": None,
+                        "level": level,
+                        "retest_index": None,
+                        "retest_price": None,
+                        "retest_time": None,
+                        "bars_since_break": None,
+                    }
+
+    # --------------------------------------------------------
+    # No valid Retest
+    # --------------------------------------------------------
 
     return {
         "retest": False,
@@ -1041,6 +1141,7 @@ def detect_retest(candles, break_event):
         "retest_index": None,
         "retest_price": None,
         "retest_time": None,
+        "bars_since_break": None,
     }
 def find_last_break_event(candles, market_structure):
     """
@@ -2764,16 +2865,20 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if retest_event["retest"]:
         
+            bars_since_break = retest_event.get("bars_since_break")
+        
             if retest_event["direction"] == "BULLISH":
                 retest_text = (
                     f"🟢 Retest صعودی\n"
-                    f"سطح: {retest_event['level']:,.2f}"
+                    f"سطح: {retest_event['level']:,.2f}\n"
+                    f"فاصله از Break: {bars_since_break} کندل"
                 )
         
             elif retest_event["direction"] == "BEARISH":
                 retest_text = (
                     f"🔴 Retest نزولی\n"
-                    f"سطح: {retest_event['level']:,.2f}"
+                    f"سطح: {retest_event['level']:,.2f}\n"
+                    f"فاصله از Break: {bars_since_break} کندل"
                 )
         
             else:
