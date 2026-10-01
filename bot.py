@@ -691,22 +691,24 @@ def analyze_market_structure(candles, swing_left=2, swing_right=2):
     }
 def detect_bos(candles, market_structure):
     """
-    Detect Break of Structure (BOS).
+    Detect Break of Structure (BOS) as a NEW event.
 
-    BOS only happens when price breaks a swing
-    in the same direction as the current market structure.
-
-    BEARISH + break below Swing Low  -> Bearish BOS
-    BULLISH + break above Swing High -> Bullish BOS
+    BULLISH structure + new break above Swing High -> Bullish BOS
+    BEARISH structure + new break below Swing Low  -> Bearish BOS
     MIXED -> No BOS
+
+    The break must happen between the previous closed candle
+    and the latest closed candle.
     """
 
-    if len(candles) < 3:
+    if len(candles) < 4:
         return {
             "bos": False,
             "direction": None,
             "broken_level": None,
             "break_index": None,
+            "break_price": None,
+            "break_time": None,
         }
 
     swing_highs = market_structure.get("swing_highs", [])
@@ -717,7 +719,14 @@ def detect_bos(candles, market_structure):
         "MIXED"
     )
 
+    # آخرین کندل بسته‌شده
     break_index = len(candles) - 2
+
+    # کندل بسته‌شده قبلی
+    previous_index = break_index - 1
+
+    previous_close = float(candles[previous_index]["close"])
+    current_close = float(candles[break_index]["close"])
 
     if not swing_highs and not swing_lows:
         return {
@@ -725,63 +734,66 @@ def detect_bos(candles, market_structure):
             "direction": None,
             "broken_level": None,
             "break_index": break_index,
+            "break_price": None,
+            "break_time": None,
         }
-
-    closed_candle = candles[break_index]
-    close_price = float(closed_candle["close"])
 
     latest_high = swing_highs[-1] if swing_highs else None
     latest_low = swing_lows[-1] if swing_lows else None
 
     # ========================================================
     # Bullish BOS
-    #
-    # ساختار فعلی صعودی است
-    # و قیمت آخرین Swing High را می‌شکند
     # ========================================================
 
     if overall_structure == "BULLISH" and latest_high:
 
-        if latest_high["index"] < break_index:
+        if latest_high["index"] < previous_index:
 
-            if close_price > latest_high["price"]:
+            level = float(latest_high["price"])
+
+            # کندل قبلی زیر/روی سطح بوده
+            # کندل فعلی بالای سطح بسته شده
+            if previous_close <= level and current_close > level:
 
                 return {
                     "bos": True,
                     "direction": "BULLISH",
                     "broken_level": latest_high,
                     "break_index": break_index,
+                    "break_price": current_close,
+                    "break_time": candles[break_index].get("time"),
                 }
 
     # ========================================================
     # Bearish BOS
-    #
-    # ساختار فعلی نزولی است
-    # و قیمت آخرین Swing Low را می‌شکند
     # ========================================================
 
     if overall_structure == "BEARISH" and latest_low:
 
-        if latest_low["index"] < break_index:
+        if latest_low["index"] < previous_index:
 
-            if close_price < latest_low["price"]:
+            level = float(latest_low["price"])
+
+            # کندل قبلی بالای/روی سطح بوده
+            # کندل فعلی زیر سطح بسته شده
+            if previous_close >= level and current_close < level:
 
                 return {
                     "bos": True,
                     "direction": "BEARISH",
                     "broken_level": latest_low,
                     "break_index": break_index,
+                    "break_price": current_close,
+                    "break_time": candles[break_index].get("time"),
                 }
-
-    # ========================================================
-    # No BOS
-    # ========================================================
 
     return {
         "bos": False,
         "direction": None,
         "broken_level": None,
         "break_index": break_index,
+        "break_price": None,
+        "break_time": None,
     }
 def detect_choch(candles, market_structure):
     """
