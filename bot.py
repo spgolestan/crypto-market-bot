@@ -904,6 +904,100 @@ def detect_bos(candles, market_structure):
         "broken_level": None,
         "break_index": break_index
     }
+def detect_choch(candles, market_structure):
+    """
+    Detect Change of Character (CHOCH).
+
+    CHOCH occurs when price breaks a structure level
+    against the current market structure.
+    """
+
+    if len(candles) < 3:
+        return {
+            "choch": False,
+            "direction": None,
+            "broken_level": None,
+            "break_index": None,
+        }
+
+    swing_highs = market_structure.get("swing_highs", [])
+    swing_lows = market_structure.get("swing_lows", [])
+
+    overall_structure = market_structure.get(
+        "overall_structure",
+        "MIXED"
+    )
+
+    if not swing_highs and not swing_lows:
+        return {
+            "choch": False,
+            "direction": None,
+            "broken_level": None,
+            "break_index": len(candles) - 2,
+        }
+
+    # ========================================================
+    # آخرین کندل بسته‌شده
+    # ========================================================
+
+    break_index = len(candles) - 2
+    closed_candle = candles[break_index]
+
+    close_price = float(closed_candle["close"])
+
+    latest_high = swing_highs[-1] if swing_highs else None
+    latest_low = swing_lows[-1] if swing_lows else None
+
+    # ========================================================
+    # Bullish CHOCH
+    #
+    # ساختار فعلی نزولی است
+    # و قیمت آخرین Swing High را می‌شکند
+    # ========================================================
+
+    if overall_structure == "BEARISH" and latest_high:
+
+        if latest_high["index"] < break_index:
+
+            if close_price > latest_high["price"]:
+
+                return {
+                    "choch": True,
+                    "direction": "BULLISH",
+                    "broken_level": latest_high,
+                    "break_index": break_index,
+                }
+
+    # ========================================================
+    # Bearish CHOCH
+    #
+    # ساختار فعلی صعودی است
+    # و قیمت آخرین Swing Low را می‌شکند
+    # ========================================================
+
+    if overall_structure == "BULLISH" and latest_low:
+
+        if latest_low["index"] < break_index:
+
+            if close_price < latest_low["price"]:
+
+                return {
+                    "choch": True,
+                    "direction": "BEARISH",
+                    "broken_level": latest_low,
+                    "break_index": break_index,
+                }
+
+    # ========================================================
+    # No CHOCH
+    # ========================================================
+
+    return {
+        "choch": False,
+        "direction": None,
+        "broken_level": None,
+        "break_index": break_index,
+    }    
 # =========================
 # Telegram Commands
 # =========================
