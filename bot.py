@@ -2049,6 +2049,29 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             latest_low_text = "N/A"   
+        # ========================================================
+        # Recent Market Structure Swings
+        # ========================================================
+
+        recent_highs = market_structure["swing_highs"][-3:]
+        recent_lows = market_structure["swing_lows"][-3:]
+
+        recent_highs_text = []
+
+        for high in recent_highs:
+            recent_highs_text.append(
+                f"{high['classification']} @ {high['price']:,.2f}"
+            )
+
+        recent_lows_text = []
+
+        for low in recent_lows:
+            recent_lows_text.append(
+                f"{low['classification']} @ {low['price']:,.2f}"
+            )
+
+        recent_highs_display = "\n".join(recent_highs_text) if recent_highs_text else "N/A"
+        recent_lows_display = "\n".join(recent_lows_text) if recent_lows_text else "N/A"
 
         message = (
             f"📊 تحلیل ترکیبی بازار\n\n"
@@ -2094,13 +2117,17 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             f"کراس EMA: {ema_cross_status}\n"
             f"کراس MACD: {macd_cross_status}\n\n"
-    
+
             f"━━ Market Structure ━━\n"
             f"ساختار کلی: {market_structure['overall_structure']}\n"
             f"🟢 امتیاز صعودی ساختار: {market_structure['bullish_score']}\n"
-            f"🔴 امتیاز نزولی ساختار: {market_structure['bearish_score']}\n"
-            f"High اخیر: {latest_high_text}\n"
-            f"Low اخیر: {latest_low_text}\n\n"
+            f"🔴 امتیاز نزولی ساختار: {market_structure['bearish_score']}\n\n"
+
+            f"🔺 Swing Highs:\n"
+            f"{recent_highs_display}\n\n"
+
+            f"🔻 Swing Lows:\n"
+            f"{recent_lows_display}\n\n"
     
             f"━━ Market Regime ━━\n"
 
