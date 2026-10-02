@@ -1046,10 +1046,35 @@ def detect_retest(
             if departure_confirmed:
 
                 if low <= level <= high:
-
-                    # Valid bullish retest:
-                    # candle must close at or above level.
-                    if close >= level:
+                    # ========================================================
+                    # Bullish Rejection Candle
+                    # ========================================================
+                    
+                    candle_range = high - low
+                    
+                    if candle_range <= 0:
+                        continue
+                    
+                    lower_wick = min(
+                        float(candle["open"]),
+                        close
+                    ) - low
+                    
+                    body = abs(close - float(candle["open"]))
+                    
+                    # کندل باید:
+                    # 1. به سطح برخورد کرده باشد
+                    # 2. Close بالای سطح باشد
+                    # 3. Wick پایینی قابل توجه داشته باشد
+                    
+                    bullish_rejection = (
+                        close >= level
+                        and lower_wick >= candle_range * 0.30
+                        and lower_wick >= body
+                    )
+                    
+                    if not bullish_rejection:
+                        continue
 
                         return {
                             "retest": True,
@@ -1106,10 +1131,37 @@ def detect_retest(
             if departure_confirmed:
 
                 if low <= level <= high:
-
-                    # Valid bearish retest:
-                    # candle must close at or below level.
-                    if close <= level:
+                    # ========================================================
+                    # Bearish Rejection Candle
+                    # ========================================================
+                    
+                    candle_range = high - low
+                    
+                    if candle_range <= 0:
+                        continue
+                    
+                    upper_wick = high - max(
+                        float(candle["open"]),
+                        close
+                    )
+                    
+                    body = abs(
+                        close - float(candle["open"])
+                    )
+                    
+                    # کندل باید:
+                    # 1. به سطح برخورد کرده باشد
+                    # 2. Close زیر سطح باشد
+                    # 3. Wick بالایی قابل توجه داشته باشد
+                    
+                    bearish_rejection = (
+                        close <= level
+                        and upper_wick >= candle_range * 0.30
+                        and upper_wick >= body
+                    )
+                    
+                    if not bearish_rejection:
+                        continue
 
                         return {
                             "retest": True,
