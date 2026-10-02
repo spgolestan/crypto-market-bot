@@ -3484,6 +3484,207 @@ async def test_4h_structure(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ در تست ساختار 4H خطایی رخ داد."
         )
+async def test_mtf_structure(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    symbol = "BTC"
+
+    if context.args:
+        symbol = context.args[0].upper()
+
+    if symbol not in SUPPORTED_SYMBOLS:
+
+        await update.message.reply_text(
+            "فعلاً فقط BTC و ETH فعال هستند."
+        )
+
+        return
+
+    try:
+
+        # ====================================================
+        # 1H
+        # ====================================================
+
+        one_hour_candles = await fetch_candles(
+            SUPPORTED_SYMBOLS[symbol],
+            3600
+        )
+
+        # ====================================================
+        # 15M
+        # ====================================================
+
+        fifteen_minute_candles = await fetch_candles(
+            SUPPORTED_SYMBOLS[symbol],
+            900
+        )
+
+        if len(one_hour_candles) < 20:
+
+            await update.message.reply_text(
+                "❌ داده کافی برای 1H دریافت نشد."
+            )
+
+            return
+
+        if len(fifteen_minute_candles) < 20:
+
+            await update.message.reply_text(
+                "❌ داده کافی برای 15M دریافت نشد."
+            )
+
+            return
+
+        # ====================================================
+        # ساخت 4H از 1H
+        # ====================================================
+
+        four_hour_candles = aggregate_candles_to_4h(
+            one_hour_candles
+        )
+
+        if len(four_hour_candles) < 10:
+
+            await update.message.reply_text(
+                "❌ داده کافی برای 4H ساخته نشد."
+            )
+
+            return
+
+        # ====================================================
+        # Market Structure
+        # ====================================================
+
+        structure_4h = analyze_market_structure(
+            candles=four_hour_candles,
+            swing_left=2,
+            swing_right=2
+        )
+
+        structure_1h = analyze_market_structure(
+            candles=one_hour_candles,
+            swing_left=2,
+            swing_right=2
+        )
+
+        structure_15m = analyze_market_structure(
+            candles=fifteen_minute_candles,
+            swing_left=2,
+            swing_right=2
+        )
+
+        structures = {
+            "4H": structure_4h,
+            "1H": structure_1h,
+            "15M": structure_15m,
+        }
+
+        # ====================================================
+        # جهت هر تایم‌فریم
+        # ====================================================
+
+        directions = {
+            timeframe: structure["overall_structure"]
+            for timeframe, structure in structures.items()
+        }
+
+        bullish_count = sum(
+            direction == "BULLISH"
+            for direction in directions.values()
+        )
+
+        bearish_count = sum(
+            direction == "BEARISH"
+            for direction in directions.values()
+        )
+
+        mixed_count = sum(
+            direction == "MIXED"
+            for direction in directions.values()
+        )
+
+        if bullish_count == 3:
+
+            alignment = "🟢 هر سه تایم‌فریم صعودی"
+
+        elif bearish_count == 3:
+
+            alignment = "🔴 هر سه تایم‌فریم نزولی"
+
+        elif bullish_count >= 2:
+
+            alignment = "🟢 هم‌جهتی غالب صعودی"
+
+        elif bearish_count >= 2:
+
+            alignment = "🔴 هم‌جهتی غالب نزولی"
+
+        else:
+
+            alignment = "🟡 ساختارها مختلط هستند"
+
+        # ====================================================
+        # پیام
+        # ====================================================
+
+        message = (
+            f"🧪 MTF Market Structure Test\n\n"
+            f"🪙 {symbol}/USD\n\n"
+
+            f"━━ 4H ━━\n"
+            f"ساختار: {structure_4h['overall_structure']}\n"
+            f"🟢 امتیاز صعودی: "
+            f"{structure_4h['bullish_score']}\n"
+            f"🔴 امتیاز نزولی: "
+            f"{structure_4h['bearish_score']}\n"
+            f"🔺 Swing High: "
+            f"{len(structure_4h['swing_highs'])}\n"
+            f"🔻 Swing Low: "
+            f"{len(structure_4h['swing_lows'])}\n\n"
+
+            f"━━ 1H ━━\n"
+            f"ساختار: {structure_1h['overall_structure']}\n"
+            f"🟢 امتیاز صعودی: "
+            f"{structure_1h['bullish_score']}\n"
+            f"🔴 امتیاز نزولی: "
+            f"{structure_1h['bearish_score']}\n"
+            f"🔺 Swing High: "
+            f"{len(structure_1h['swing_highs'])}\n"
+            f"🔻 Swing Low: "
+            f"{len(structure_1h['swing_lows'])}\n\n"
+
+            f"━━ 15M ━━\n"
+            f"ساختار: {structure_15m['overall_structure']}\n"
+            f"🟢 امتیاز صعودی: "
+            f"{structure_15m['bullish_score']}\n"
+            f"🔴 امتیاز نزولی: "
+            f"{structure_15m['bearish_score']}\n"
+            f"🔺 Swing High: "
+            f"{len(structure_15m['swing_highs'])}\n"
+            f"🔻 Swing Low: "
+            f"{len(structure_15m['swing_lows'])}\n\n"
+
+            f"━━ MTF Alignment ━━\n"
+            f"4H  → {directions['4H']}\n"
+            f"1H  → {directions['1H']}\n"
+            f"15M → {directions['15M']}\n\n"
+            f"{alignment}"
+        )
+
+        await update.message.reply_text(
+            message
+        )
+
+    except Exception as exc:
+
+        print(
+            f"MTF Structure Test error: {exc}",
+            flush=True
+        )
+
+        await update.message.reply_text(
+            "❌ در تست MTF Market Structure خطایی رخ داد."
+        )
 async def analyze_multi_timeframe(symbol):
     """15m = کوتاه‌مدت، 1h = روند اصلی، 6h = ساختار بالاتر."""
     symbol = symbol.upper()
@@ -4737,6 +4938,12 @@ async def start_telegram():
         CommandHandler(
             "test4h",
             test_4h_structure
+        )
+    )
+    telegram_application.add_handler(
+        CommandHandler(
+            "testmtf",
+            test_mtf_structure
         )
     )
 
