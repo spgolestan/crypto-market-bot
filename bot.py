@@ -3551,6 +3551,33 @@ async def test_mtf_structure(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
             return
         # ====================================================
+        # Market Structure
+        # ====================================================
+
+        structure_4h = analyze_market_structure(
+            candles=four_hour_candles,
+            swing_left=2,
+            swing_right=2
+        )
+
+        structure_1h = analyze_market_structure(
+            candles=one_hour_candles,
+            swing_left=2,
+            swing_right=2
+        )
+
+        structure_15m = analyze_market_structure(
+            candles=fifteen_minute_candles,
+            swing_left=2,
+            swing_right=2
+        )
+
+        structures = {
+            "4H": structure_4h,
+            "1H": structure_1h,
+            "15M": structure_15m,
+        }
+        # ====================================================
         # BOS / CHOCH
         # ====================================================
 
@@ -3583,33 +3610,6 @@ async def test_mtf_structure(update: Update, context: ContextTypes.DEFAULT_TYPE)
             candles=fifteen_minute_candles,
             market_structure=structure_15m
         )
-        # ====================================================
-        # Market Structure
-        # ====================================================
-
-        structure_4h = analyze_market_structure(
-            candles=four_hour_candles,
-            swing_left=2,
-            swing_right=2
-        )
-
-        structure_1h = analyze_market_structure(
-            candles=one_hour_candles,
-            swing_left=2,
-            swing_right=2
-        )
-
-        structure_15m = analyze_market_structure(
-            candles=fifteen_minute_candles,
-            swing_left=2,
-            swing_right=2
-        )
-
-        structures = {
-            "4H": structure_4h,
-            "1H": structure_1h,
-            "15M": structure_15m,
-        }
 
         # ====================================================
         # جهت هر تایم‌فریم
