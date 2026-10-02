@@ -3659,12 +3659,87 @@ async def test_mtf_structure(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # پیام
         # ====================================================
 
+        # ====================================================
+        # نمایش BOS / CHOCH
+        # ====================================================
+
+        def event_text(bos, choch):
+
+            if bos["bos"]:
+
+                if bos["direction"] == "BULLISH":
+
+                    bos_text = (
+                        f"🟢 BOS صعودی | "
+                        f"سطح: "
+                        f"{bos['broken_level']['price']:,.2f}"
+                    )
+
+                else:
+
+                    bos_text = (
+                        f"🔴 BOS نزولی | "
+                        f"سطح: "
+                        f"{bos['broken_level']['price']:,.2f}"
+                    )
+
+            else:
+
+                bos_text = "⚪ BOS شناسایی نشد"
+
+            if choch["choch"]:
+
+                if choch["direction"] == "BULLISH":
+
+                    choch_text = (
+                        f"🟢 CHOCH صعودی | "
+                        f"سطح: "
+                        f"{choch['broken_level']['price']:,.2f}"
+                    )
+
+                else:
+
+                    choch_text = (
+                        f"🔴 CHOCH نزولی | "
+                        f"سطح: "
+                        f"{choch['broken_level']['price']:,.2f}"
+                    )
+
+            else:
+
+                choch_text = "⚪ CHOCH شناسایی نشد"
+
+            return (
+                f"{bos_text}\n"
+                f"{choch_text}"
+            )
+
+        event_4h = event_text(
+            bos_4h,
+            choch_4h
+        )
+
+        event_1h = event_text(
+            bos_1h,
+            choch_1h
+        )
+
+        event_15m = event_text(
+            bos_15m,
+            choch_15m
+        )
+
+        # ====================================================
+        # پیام نهایی
+        # ====================================================
+
         message = (
             f"🧪 MTF Market Structure Test\n\n"
             f"🪙 {symbol}/USD\n\n"
 
             f"━━ 4H ━━\n"
-            f"ساختار: {structure_4h['overall_structure']}\n"
+            f"ساختار: "
+            f"{structure_4h['overall_structure']}\n"
             f"🟢 امتیاز صعودی: "
             f"{structure_4h['bullish_score']}\n"
             f"🔴 امتیاز نزولی: "
@@ -3672,10 +3747,12 @@ async def test_mtf_structure(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"🔺 Swing High: "
             f"{len(structure_4h['swing_highs'])}\n"
             f"🔻 Swing Low: "
-            f"{len(structure_4h['swing_lows'])}\n\n"
+            f"{len(structure_4h['swing_lows'])}\n"
+            f"{event_4h}\n\n"
 
             f"━━ 1H ━━\n"
-            f"ساختار: {structure_1h['overall_structure']}\n"
+            f"ساختار: "
+            f"{structure_1h['overall_structure']}\n"
             f"🟢 امتیاز صعودی: "
             f"{structure_1h['bullish_score']}\n"
             f"🔴 امتیاز نزولی: "
@@ -3683,10 +3760,12 @@ async def test_mtf_structure(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"🔺 Swing High: "
             f"{len(structure_1h['swing_highs'])}\n"
             f"🔻 Swing Low: "
-            f"{len(structure_1h['swing_lows'])}\n\n"
+            f"{len(structure_1h['swing_lows'])}\n"
+            f"{event_1h}\n\n"
 
             f"━━ 15M ━━\n"
-            f"ساختار: {structure_15m['overall_structure']}\n"
+            f"ساختار: "
+            f"{structure_15m['overall_structure']}\n"
             f"🟢 امتیاز صعودی: "
             f"{structure_15m['bullish_score']}\n"
             f"🔴 امتیاز نزولی: "
@@ -3694,15 +3773,16 @@ async def test_mtf_structure(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"🔺 Swing High: "
             f"{len(structure_15m['swing_highs'])}\n"
             f"🔻 Swing Low: "
-            f"{len(structure_15m['swing_lows'])}\n\n"
+            f"{len(structure_15m['swing_lows'])}\n"
+            f"{event_15m}\n\n"
 
             f"━━ MTF Alignment ━━\n"
             f"4H  → {directions['4H']}\n"
             f"1H  → {directions['1H']}\n"
             f"15M → {directions['15M']}\n\n"
+
             f"{alignment}"
         )
-
         await update.message.reply_text(
             message
         )
