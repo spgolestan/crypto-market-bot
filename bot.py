@@ -3076,7 +3076,47 @@ async def fetch_candles(product_id, granularity):
     except Exception as exc:
         print(f"Fetch candles error: {exc}", flush=True)
         return []
+def aggregate_candles_to_4h(candles):
+    """
+    Convert 1H candles into 4H candles.
 
+    Every 4 consecutive 1H candles become one 4H candle.
+    """
+
+    if len(candles) < 4:
+        return []
+
+    result = []
+
+    # تعداد کامل گروه‌های 4 تایی
+    usable_count = len(candles) - (len(candles) % 4)
+
+    for i in range(0, usable_count, 4):
+
+        group = candles[i:i + 4]
+
+        first = group[0]
+        last = group[-1]
+
+        result.append({
+            "time": first["time"],
+            "open": first["open"],
+            "high": max(
+                candle["high"]
+                for candle in group
+            ),
+            "low": min(
+                candle["low"]
+                for candle in group
+            ),
+            "close": last["close"],
+            "volume": sum(
+                candle["volume"]
+                for candle in group
+            ),
+        })
+
+    return result
 
 def _ema_series(values, period):
     if len(values) < period:
@@ -3314,8 +3354,136 @@ def calculate_mtf_confluence(analyses):
         "interpretation": interpretation,
         "directions": directions,
     }
+async def test_4h_structure(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+    symbol = "BTC"
 
+    if context.args:
+        symbol = context.args[0].upper()
+
+    if symbol not in SUPPORTED_SYMBOLS:
+
+        await update.message.reply_text(
+            "فعلاً فقط BTC و ETH فعال هستند."
+        )
+
+        return
+
+    try:
+
+        # --------------------------------------------
+        # دریافت کندل‌های 1H
+        # --------------------------------------------
+
+        one_hour_candles = await fetch_candles(
+            SUPPORTED_SYMBOLS[symbol],
+            3600
+        )
+
+        if len(one_hour_candles) < 20:
+
+            await update.message.reply_text(
+                "❌ برای ساخت 4H داده کافی نیست."
+            )
+
+            return
+
+        # --------------------------------------------
+        # ساخت 4H
+        # --------------------------------------------
+
+        four_hour_candles = aggregate_candles_to_4h(
+            one_hour_candles
+        )
+
+        if len(four_hour_candles) < 10:
+
+            await update.message.reply_text(
+                "❌ تعداد کندل‌های 4H کافی نیست."
+            )
+
+            return
+
+        # --------------------------------------------
+        # Market Structure
+        # --------------------------------------------
+
+        structure = analyze_market_structure(
+            candles=four_hour_candles,
+            swing_left=2,
+            swing_right=2
+        )
+
+        swing_highs = structure.get(
+            "swing_highs",
+            []
+        )
+
+        swing_lows = structure.get(
+            "swing_lows",
+            []
+        )
+
+        latest_high = (
+            swing_highs[-1]
+            if swing_highs
+            else None
+        )
+
+        latest_low = (
+            swing_lows[-1]
+            if swing_lows
+            else None
+        )
+
+        message = (
+            f"🧪 تست ساختار 4H\n\n"
+            f"🪙 {symbol}/USD\n"
+            f"🕯 کندل‌های 1H: {len(one_hour_candles)}\n"
+            f"🕯 کندل‌های 4H: {len(four_hour_candles)}\n\n"
+
+            f"━━ Market Structure ━━\n"
+            f"ساختار کلی: "
+            f"{structure['overall_structure']}\n"
+            f"🟢 امتیاز صعودی: "
+            f"{structure['bullish_score']}\n"
+            f"🔴 امتیاز نزولی: "
+            f"{structure['bearish_score']}\n\n"
+
+            f"🔺 Swing High: "
+            f"{len(swing_highs)}\n"
+            f"🔻 Swing Low: "
+            f"{len(swing_lows)}\n"
+        )
+
+        if latest_high:
+
+            message += (
+                f"\nآخرین Swing High: "
+                f"{latest_high['price']:,.2f}"
+            )
+
+        if latest_low:
+
+            message += (
+                f"\nآخرین Swing Low: "
+                f"{latest_low['price']:,.2f}"
+            )
+
+        await update.message.reply_text(
+            message
+        )
+
+    except Exception as exc:
+
+        print(
+            f"4H Structure Test error: {exc}",
+            flush=True
+        )
+
+        await update.message.reply_text(
+            "❌ در تست ساختار 4H خطایی رخ داد."
+        )
 async def analyze_multi_timeframe(symbol):
     """15m = کوتاه‌مدت، 1h = روند اصلی، 6h = ساختار بالاتر."""
     symbol = symbol.upper()
@@ -4563,6 +4731,12 @@ async def start_telegram():
         CommandHandler(
             "teststructure",
             teststructure
+        )
+    )
+    telegram_application.add_handler(
+        CommandHandler(
+            "test4h",
+            test_4h_structure
         )
     )
 
