@@ -918,12 +918,14 @@ def detect_retest(
         -> price moves at least ATR * multiplier above level
         -> price returns to level
         -> candle closes at or above level
+        -> bullish rejection candle
 
     Bearish:
         Break below level
         -> price moves at least ATR * multiplier below level
         -> price returns to level
         -> candle closes at or below level
+        -> bearish rejection candle
 
     The break candle itself is ignored.
     The current open candle is ignored.
@@ -998,7 +1000,9 @@ def detect_retest(
             "level": level,
         }
 
-    atr = sum(true_ranges[-atr_period:]) / atr_period
+    atr = sum(
+        true_ranges[-atr_period:]
+    ) / atr_period
 
     departure_distance = atr * atr_multiplier
 
@@ -1019,7 +1023,10 @@ def detect_retest(
 
     if direction == "BULLISH":
 
-        for i in range(break_index + 1, search_end + 1):
+        for i in range(
+            break_index + 1,
+            search_end + 1
+        ):
 
             candle = candles[i]
 
@@ -1035,7 +1042,9 @@ def detect_retest(
             if not departure_confirmed:
 
                 if high >= level + departure_distance:
+
                     departure_confirmed = True
+
                     continue
 
             # --------------------------------------------
@@ -1046,54 +1055,49 @@ def detect_retest(
             if departure_confirmed:
 
                 if low <= level <= high:
-                    # ========================================================
+
+                    # ====================================================
                     # Bullish Rejection Candle
-                    # ========================================================
-                    
+                    # ====================================================
+
                     candle_range = high - low
-                    
+
                     if candle_range <= 0:
                         continue
-                    
-                    lower_wick = min(
-                        float(candle["open"]),
+
+                    lower_wick = (
+                        min(
+                            float(candle["open"]),
+                            close
+                        ) - low
+                    )
+
+                    body = abs(
                         close
-                    ) - low
-                    
-                    body = abs(close - float(candle["open"]))
-                    
-                    # کندل باید:
-                    # 1. به سطح برخورد کرده باشد
-                    # 2. Close بالای سطح باشد
-                    # 3. Wick پایینی قابل توجه داشته باشد
-                    
+                        - float(candle["open"])
+                    )
+
                     bullish_rejection = (
                         close >= level
-                        and lower_wick >= candle_range * 0.30
+                        and lower_wick
+                        >= candle_range * 0.30
                         and lower_wick >= body
                     )
-                    
+
+                    # اگر این Touch، Rejection معتبر نبود
+                    # کندل‌های بعدی را همچنان بررسی می‌کنیم.
                     if not bullish_rejection:
                         continue
 
-                        return {
-                            "retest": True,
-                            "direction": "BULLISH",
-                            "level": level,
-                            "retest_index": i,
-                            "retest_price": level,
-                            "retest_time": candle.get("time"),
-                            "bars_since_break": i - break_index,
-                            "atr": atr,
-                            "departure_distance": departure_distance,
-                        }
-
-                    # Close below broken level:
-                    # bullish retest is invalid.
+                    # Retest معتبر پیدا شد
                     return {
-                        **empty_result,
-                        "direction": None,
+                        "retest": True,
+                        "direction": "BULLISH",
                         "level": level,
+                        "retest_index": i,
+                        "retest_price": level,
+                        "retest_time": candle.get("time"),
+                        "bars_since_break": i - break_index,
                         "atr": atr,
                         "departure_distance": departure_distance,
                     }
@@ -1104,7 +1108,10 @@ def detect_retest(
 
     elif direction == "BEARISH":
 
-        for i in range(break_index + 1, search_end + 1):
+        for i in range(
+            break_index + 1,
+            search_end + 1
+        ):
 
             candle = candles[i]
 
@@ -1120,7 +1127,9 @@ def detect_retest(
             if not departure_confirmed:
 
                 if low <= level - departure_distance:
+
                     departure_confirmed = True
+
                     continue
 
             # --------------------------------------------
@@ -1131,56 +1140,50 @@ def detect_retest(
             if departure_confirmed:
 
                 if low <= level <= high:
-                    # ========================================================
+
+                    # ====================================================
                     # Bearish Rejection Candle
-                    # ========================================================
-                    
+                    # ====================================================
+
                     candle_range = high - low
-                    
+
                     if candle_range <= 0:
                         continue
-                    
-                    upper_wick = high - max(
-                        float(candle["open"]),
-                        close
+
+                    upper_wick = (
+                        high
+                        - max(
+                            float(candle["open"]),
+                            close
+                        )
                     )
-                    
+
                     body = abs(
-                        close - float(candle["open"])
+                        close
+                        - float(candle["open"])
                     )
-                    
-                    # کندل باید:
-                    # 1. به سطح برخورد کرده باشد
-                    # 2. Close زیر سطح باشد
-                    # 3. Wick بالایی قابل توجه داشته باشد
-                    
+
                     bearish_rejection = (
                         close <= level
-                        and upper_wick >= candle_range * 0.30
+                        and upper_wick
+                        >= candle_range * 0.30
                         and upper_wick >= body
                     )
-                    
+
+                    # اگر این Touch، Rejection معتبر نبود
+                    # کندل‌های بعدی را همچنان بررسی می‌کنیم.
                     if not bearish_rejection:
                         continue
 
-                        return {
-                            "retest": True,
-                            "direction": "BEARISH",
-                            "level": level,
-                            "retest_index": i,
-                            "retest_price": level,
-                            "retest_time": candle.get("time"),
-                            "bars_since_break": i - break_index,
-                            "atr": atr,
-                            "departure_distance": departure_distance,
-                        }
-
-                    # Close above broken level:
-                    # bearish retest is invalid.
+                    # Retest معتبر پیدا شد
                     return {
-                        **empty_result,
-                        "direction": None,
+                        "retest": True,
+                        "direction": "BEARISH",
                         "level": level,
+                        "retest_index": i,
+                        "retest_price": level,
+                        "retest_time": candle.get("time"),
+                        "bars_since_break": i - break_index,
                         "atr": atr,
                         "departure_distance": departure_distance,
                     }
