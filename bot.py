@@ -3660,7 +3660,7 @@ async def teststructure(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     choch_events.append(choch)
 
         # ========================================================
-        # Retest
+        # Retest + Debug
         # ========================================================
 
         all_break_events = (
@@ -3668,7 +3668,15 @@ async def teststructure(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + choch_events
         )
 
+        departure_count = 0
+        touch_count = 0
+        rejection_count = 0
+
         for event in all_break_events:
+
+            # --------------------------------------------
+            # Retest واقعی
+            # --------------------------------------------
 
             retest = detect_retest(
                 candles=candles,
@@ -3687,6 +3695,239 @@ async def teststructure(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     seen_retests.add(key)
 
                     retest_events.append(retest)
+
+            # --------------------------------------------
+            # Debug
+            # --------------------------------------------
+
+            direction = event.get("direction")
+            broken_level = event.get("broken_level")
+            break_index = event.get("break_index")
+
+            if not broken_level or break_index is None:
+                continue
+
+            level = float(
+                broken_level["price"]
+            )
+
+            atr_period = 14
+            atr_multiplier = 0.5
+            max_bars = 20
+
+            if len(candles) < atr_period + 3:
+                continue
+
+            true_ranges = []
+
+            for i in range(1, len(candles)):
+
+                current_high = float(
+                    candles[i]["high"]
+                )
+
+                current_low = float(
+                    candles[i]["low"]
+                )
+
+                previous_close = float(
+                    candles[i - 1]["close"]
+                )
+
+                tr = max(
+                    current_high - current_low,
+                    abs(
+                        current_high
+                        - previous_close
+                    ),
+                    abs(
+                        current_low
+                        - previous_close
+                    )
+                )
+
+                true_ranges.append(tr)
+
+            if len(true_ranges) < atr_period:
+                continue
+
+            atr = (
+                sum(
+                    true_ranges[-atr_period:]
+                )
+                / atr_period
+            )
+
+            departure_distance = (
+                atr * atr_multiplier
+            )
+
+            last_closed_index = (
+                len(candles) - 2
+            )
+
+            search_end = min(
+                last_closed_index,
+                break_index + max_bars
+            )
+
+            departure_confirmed = False
+            touch_found = False
+            rejection_found = False
+
+            # --------------------------------------------
+            # Bullish
+            # --------------------------------------------
+
+            if direction == "BULLISH":
+
+                for i in range(
+                    break_index + 1,
+                    search_end + 1
+                ):
+
+                    candle = candles[i]
+
+                    high = float(candle["high"])
+                    low = float(candle["low"])
+                    close = float(candle["close"])
+
+                    if not departure_confirmed:
+
+                        if high >= (
+                            level
+                            + departure_distance
+                        ):
+
+                            departure_confirmed = True
+                            departure_count += 1
+
+                            continue
+
+                    if departure_confirmed:
+
+                        if low <= level <= high:
+
+                            if not touch_found:
+
+                                touch_found = True
+                                touch_count += 1
+
+                            candle_range = (
+                                high - low
+                            )
+
+                            if candle_range <= 0:
+                                continue
+
+                            lower_wick = (
+                                min(
+                                    float(
+                                        candle["open"]
+                                    ),
+                                    close
+                                )
+                                - low
+                            )
+
+                            body = abs(
+                                close
+                                - float(
+                                    candle["open"]
+                                )
+                            )
+
+                            bullish_rejection = (
+                                close >= level
+                                and lower_wick
+                                >= candle_range * 0.30
+                                and lower_wick
+                                >= body
+                            )
+
+                            if bullish_rejection:
+
+                                rejection_count += 1
+                                rejection_found = True
+
+                                break
+
+            # --------------------------------------------
+            # Bearish
+            # --------------------------------------------
+
+            elif direction == "BEARISH":
+
+                for i in range(
+                    break_index + 1,
+                    search_end + 1
+                ):
+
+                    candle = candles[i]
+
+                    high = float(candle["high"])
+                    low = float(candle["low"])
+                    close = float(candle["close"])
+
+                    if not departure_confirmed:
+
+                        if low <= (
+                            level
+                            - departure_distance
+                        ):
+
+                            departure_confirmed = True
+                            departure_count += 1
+
+                            continue
+
+                    if departure_confirmed:
+
+                        if low <= level <= high:
+
+                            if not touch_found:
+
+                                touch_found = True
+                                touch_count += 1
+
+                            candle_range = (
+                                high - low
+                            )
+
+                            if candle_range <= 0:
+                                continue
+
+                            upper_wick = (
+                                high
+                                - max(
+                                    float(
+                                        candle["open"]
+                                    ),
+                                    close
+                                )
+                            )
+
+                            body = abs(
+                                close
+                                - float(
+                                    candle["open"]
+                                )
+                            )
+
+                            bearish_rejection = (
+                                close <= level
+                                and upper_wick
+                                >= candle_range * 0.30
+                                and upper_wick
+                                >= body
+                            )
+
+                            if bearish_rejection:
+
+                                rejection_count += 1
+                                rejection_found = True
+
+                                break
 
         # ========================================================
         # نمایش نتیجه
@@ -3748,6 +3989,12 @@ async def teststructure(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🟢 صعودی: {bullish_retest}\n"
             f"🔴 نزولی: {bearish_retest}\n"
             f"📊 مجموع: {len(retest_events)}\n"
+            f"\n"
+            f"━━ Retest Debug ━━\n"
+            f"🚀 Departure: {departure_count}\n"
+            f"🎯 Touch: {touch_count}\n"
+            f"🕯 Rejection: {rejection_count}\n"
+
         )
 
         await update.message.reply_text(
