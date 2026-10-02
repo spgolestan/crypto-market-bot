@@ -3490,7 +3490,280 @@ async def mtf_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"❌ خطا در تحلیل Multi-Timeframe:\n{exc}"
         )
+# ========================================================
+# Historical Structure Test
+# ========================================================
 
+async def teststructure(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if len(context.args) < 2:
+
+        await update.message.reply_text(
+            "فرمت دستور:\n\n"
+            "/teststructure BTC 5m\n\n"
+            "مثال:\n"
+            "/teststructure ETH 1m"
+        )
+
+        return
+
+    symbol = context.args[0].upper()
+    timeframe = context.args[1].lower()
+
+    symbols = {
+        "BTC": "BTC-USD",
+        "ETH": "ETH-USD"
+    }
+
+    timeframes = {
+        "1m": 60,
+        "5m": 300,
+        "15m": 900,
+        "1h": 3600,
+        "6h": 21600,
+        "1d": 86400
+    }
+
+    if symbol not in symbols:
+
+        await update.message.reply_text(
+            "فعلاً فقط BTC و ETH فعال هستند."
+        )
+
+        return
+
+    if timeframe not in timeframes:
+
+        await update.message.reply_text(
+            "تایم‌فریم نامعتبر است."
+        )
+
+        return
+
+    product_id = symbols[symbol]
+    granularity = timeframes[timeframe]
+
+    url = (
+        f"https://api.exchange.coinbase.com/"
+        f"products/{product_id}/candles"
+    )
+
+    try:
+
+        async with httpx.AsyncClient(timeout=15) as client:
+
+            response = await client.get(
+                url,
+                params={
+                    "granularity": granularity
+                },
+                headers={
+                    "Accept": "application/json"
+                }
+            )
+
+            response.raise_for_status()
+
+            data = response.json()
+
+        if len(data) < 30:
+
+            await update.message.reply_text(
+                "❌ اطلاعات تاریخی کافی دریافت نشد."
+            )
+
+            return
+
+        # قدیمی → جدید
+        data.sort(key=lambda x: x[0])
+
+        # آخرین کندل را کنار می‌گذاریم
+        # تا تست روی کندل‌های بسته‌شده انجام شود.
+        data = data[:-1]
+
+        candles = [
+            {
+                "time": int(candle[0]),
+                "open": float(candle[3]),
+                "high": float(candle[2]),
+                "low": float(candle[1]),
+                "close": float(candle[4]),
+                "volume": float(candle[5]),
+            }
+            for candle in data
+        ]
+
+        bos_events = []
+        choch_events = []
+        retest_events = []
+
+        seen_bos = set()
+        seen_choch = set()
+        seen_retests = set()
+
+        # ========================================================
+        # بررسی تاریخی
+        # ========================================================
+
+        for end in range(25, len(candles)):
+
+            test_candles = candles[:end]
+
+            market_structure = analyze_market_structure(
+                candles=test_candles,
+                swing_left=2,
+                swing_right=2
+            )
+
+            bos = detect_bos(
+                candles=test_candles,
+                market_structure=market_structure
+            )
+
+            choch = detect_choch(
+                candles=test_candles,
+                market_structure=market_structure
+            )
+
+            # ====================================================
+            # BOS
+            # ====================================================
+
+            if bos["bos"]:
+
+                key = (
+                    bos["direction"],
+                    bos["break_index"]
+                )
+
+                if key not in seen_bos:
+
+                    seen_bos.add(key)
+
+                    bos_events.append(bos)
+
+            # ====================================================
+            # CHOCH
+            # ====================================================
+
+            if choch["choch"]:
+
+                key = (
+                    choch["direction"],
+                    choch["break_index"]
+                )
+
+                if key not in seen_choch:
+
+                    seen_choch.add(key)
+
+                    choch_events.append(choch)
+
+        # ========================================================
+        # Retest
+        # ========================================================
+
+        all_break_events = (
+            bos_events
+            + choch_events
+        )
+
+        for event in all_break_events:
+
+            retest = detect_retest(
+                candles=candles,
+                break_event=event
+            )
+
+            if retest["retest"]:
+
+                key = (
+                    retest["direction"],
+                    retest["retest_index"]
+                )
+
+                if key not in seen_retests:
+
+                    seen_retests.add(key)
+
+                    retest_events.append(retest)
+
+        # ========================================================
+        # نمایش نتیجه
+        # ========================================================
+
+        bullish_bos = sum(
+            1
+            for event in bos_events
+            if event["direction"] == "BULLISH"
+        )
+
+        bearish_bos = sum(
+            1
+            for event in bos_events
+            if event["direction"] == "BEARISH"
+        )
+
+        bullish_choch = sum(
+            1
+            for event in choch_events
+            if event["direction"] == "BULLISH"
+        )
+
+        bearish_choch = sum(
+            1
+            for event in choch_events
+            if event["direction"] == "BEARISH"
+        )
+
+        bullish_retest = sum(
+            1
+            for event in retest_events
+            if event["direction"] == "BULLISH"
+        )
+
+        bearish_retest = sum(
+            1
+            for event in retest_events
+            if event["direction"] == "BEARISH"
+        )
+
+        message = (
+            f"🧪 Historical Structure Test\n\n"
+            f"🪙 {symbol}/USD\n"
+            f"⏱ تایم‌فریم: {timeframe}\n"
+            f"🕯 تعداد کندل: {len(candles)}\n\n"
+
+            f"━━ BOS ━━\n"
+            f"🟢 صعودی: {bullish_bos}\n"
+            f"🔴 نزولی: {bearish_bos}\n"
+            f"📊 مجموع: {len(bos_events)}\n\n"
+
+            f"━━ CHOCH ━━\n"
+            f"🟢 صعودی: {bullish_choch}\n"
+            f"🔴 نزولی: {bearish_choch}\n"
+            f"📊 مجموع: {len(choch_events)}\n\n"
+
+            f"━━ Retest ━━\n"
+            f"🟢 صعودی: {bullish_retest}\n"
+            f"🔴 نزولی: {bearish_retest}\n"
+            f"📊 مجموع: {len(retest_events)}\n"
+        )
+
+        await update.message.reply_text(
+            message
+        )
+
+    except Exception as e:
+
+        print(
+            f"Historical Structure Test error: {e}",
+            flush=True
+        )
+
+        await update.message.reply_text(
+            "❌ در تست تاریخی Structure خطایی رخ داد."
+        )
 
 # ====================
 # ANALYS
@@ -4036,6 +4309,13 @@ async def start_telegram():
     telegram_application.add_handler(
         CommandHandler("mtf", mtf_command)
     )
+    telegram_application.add_handler(
+        CommandHandler(
+            "teststructure",
+            teststructure
+        )
+    )
+
     await telegram_application.initialize()
 
     await telegram_application.start()
