@@ -3550,7 +3550,39 @@ async def test_mtf_structure(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
 
             return
+        # ====================================================
+        # BOS / CHOCH
+        # ====================================================
 
+        bos_4h = detect_bos(
+            candles=four_hour_candles,
+            market_structure=structure_4h
+        )
+
+        choch_4h = detect_choch(
+            candles=four_hour_candles,
+            market_structure=structure_4h
+        )
+
+        bos_1h = detect_bos(
+            candles=one_hour_candles,
+            market_structure=structure_1h
+        )
+
+        choch_1h = detect_choch(
+            candles=one_hour_candles,
+            market_structure=structure_1h
+        )
+
+        bos_15m = detect_bos(
+            candles=fifteen_minute_candles,
+            market_structure=structure_15m
+        )
+
+        choch_15m = detect_choch(
+            candles=fifteen_minute_candles,
+            market_structure=structure_15m
+        )
         # ====================================================
         # Market Structure
         # ====================================================
