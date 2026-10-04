@@ -4050,49 +4050,20 @@ def build_mtf_structure_engine(
         "alignment_score": alignment_score,
         "timeframes": snapshots,
     }
-
-
-def format_mtf_event(event):
+def format_mtf_event(event, event_name):
     """
-    Convert BOS / CHOCH event into a readable text.
+    Convert BOS / CHOCH event into readable text.
     """
 
     if not event:
         return "—"
 
-    event_type = event.get(
-        "type",
-        event.get("event", "EVENT")
-    )
-
     direction = event.get(
-        "direction",
-        ""
+        "direction"
     )
 
-    if direction:
-        return f"{event_type} {direction}"
-
-    return str(event_type)
-
-
-def format_mtf_last_break(event):
-    """
-    Convert historical last break event into readable text.
-    """
-
-    if not event:
-        return "—"
-
-    event_type = event.get(
-        "type",
-        event.get("event", "BREAK")
-    )
-
-    direction = event.get(
-        "direction",
-        ""
-    )
+    if not direction:
+        return event_name
 
     level = event.get(
         "level"
@@ -4100,13 +4071,58 @@ def format_mtf_last_break(event):
 
     if level is not None:
         return (
-            f"{event_type} {direction} "
-            f"@ {float(level):,.2f}"
+            f"{event_name} {direction}"
+            f" @ {float(level):,.2f}"
         )
 
-    return f"{event_type} {direction}"
+    return f"{event_name} {direction}"
 
 
+def format_mtf_last_break(event):
+    """
+    Convert historical last break event
+    into readable text.
+    """
+
+    if not event:
+        return "—"
+
+    event_type = (
+        event.get("event_type")
+        or event.get("type")
+        or event.get("event")
+        or event.get("break_type")
+    )
+
+    direction = event.get(
+        "direction"
+    )
+
+    level = event.get(
+        "level"
+    )
+
+    # اگر نوع event داخل dict نبود،
+    # از فیلدهای احتمالی BOS / CHOCH تشخیص بده
+    if not event_type:
+        if event.get("bos"):
+            event_type = "BOS"
+        elif event.get("choch"):
+            event_type = "CHOCH"
+
+    if not event_type:
+        event_type = "BREAK"
+
+    if direction and level is not None:
+        return (
+            f"{event_type} {direction}"
+            f" @ {float(level):,.2f}"
+        )
+
+    if direction:
+        return f"{event_type} {direction}"
+
+    return str(event_type)
 # ============================================================
 # TEST MTF STRUCTURE ENGINE
 # ============================================================
@@ -4212,9 +4228,9 @@ async def test_mtf_engine(
             f"🔻 Swing Low: "
             f"{len(tf_4h['swing_lows'])}\n"
             f"⚡ Current BOS: "
-            f"{format_mtf_event(tf_4h['current_bos'])}\n"
+            f"{format_mtf_event( tf_4h["current_bos"], "BOS" )}\n"
             f"🔄 Current CHOCH: "
-            f"{format_mtf_event(tf_4h['current_choch'])}\n"
+            f"{format_mtf_event( tf_4h["current_choch"], "CHOCH" )}\n"
             f"🕘 Last Break: "
             f"{format_mtf_last_break(tf_4h['last_break_event'])}\n\n"
 
@@ -4225,9 +4241,9 @@ async def test_mtf_engine(
             f"🔻 Swing Low: "
             f"{len(tf_1h['swing_lows'])}\n"
             f"⚡ Current BOS: "
-            f"{format_mtf_event(tf_1h['current_bos'])}\n"
+            f"{format_mtf_event(tf_1h["current_bos"], "BOS")}\n"
             f"🔄 Current CHOCH: "
-            f"{format_mtf_event(tf_1h['current_choch'])}\n"
+            f"{format_mtf_event(tf_1h["current_choch"], "CHOCH")}\n"
             f"🕘 Last Break: "
             f"{format_mtf_last_break(tf_1h['last_break_event'])}\n\n"
 
@@ -4238,9 +4254,9 @@ async def test_mtf_engine(
             f"🔻 Swing Low: "
             f"{len(tf_15m['swing_lows'])}\n"
             f"⚡ Current BOS: "
-            f"{format_mtf_event(tf_15m['current_bos'])}\n"
+            f"{format_mtf_event(tf_15m["current_bos"], "BOS")}\n"
             f"🔄 Current CHOCH: "
-            f"{format_mtf_event(tf_15m['current_choch'])}\n"
+            f"{format_mtf_event(tf_15m["current_choch"], "CHOCH")}\n"
             f"🕘 Last Break: "
             f"{format_mtf_last_break(tf_15m['last_break_event'])}\n\n"
 
