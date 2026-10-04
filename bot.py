@@ -3797,6 +3797,297 @@ async def test_mtf_structure(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(
             "❌ در تست MTF Market Structure خطایی رخ داد."
         )
+async def test_mtf_historical(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    symbol = "BTC"
+
+    if context.args:
+        symbol = context.args[0].upper()
+
+    if symbol not in SUPPORTED_SYMBOLS:
+
+        await update.message.reply_text(
+            "فعلاً فقط BTC و ETH فعال هستند."
+        )
+
+        return
+
+    try:
+
+        # ====================================================
+        # دریافت داده‌ها
+        # ====================================================
+
+        one_hour_candles = await fetch_candles(
+            SUPPORTED_SYMBOLS[symbol],
+            3600
+        )
+
+        fifteen_minute_candles = await fetch_candles(
+            SUPPORTED_SYMBOLS[symbol],
+            900
+        )
+
+        if len(one_hour_candles) < 30:
+
+            await update.message.reply_text(
+                "❌ داده کافی برای 1H دریافت نشد."
+            )
+
+            return
+
+        if len(fifteen_minute_candles) < 30:
+
+            await update.message.reply_text(
+                "❌ داده کافی برای 15M دریافت نشد."
+            )
+
+            return
+
+        # ====================================================
+        # حذف کندل باز فعلی
+        # ====================================================
+
+        one_hour_candles = one_hour_candles[:-1]
+        fifteen_minute_candles = fifteen_minute_candles[:-1]
+
+        # ====================================================
+        # ساخت 4H
+        # ====================================================
+
+        four_hour_candles = aggregate_candles_to_4h(
+            one_hour_candles
+        )
+
+        if len(four_hour_candles) < 25:
+
+            await update.message.reply_text(
+                "❌ داده کافی برای 4H وجود ندارد."
+            )
+
+            return
+
+        # ====================================================
+        # تابع بررسی تاریخی
+        # ====================================================
+
+        def scan_historical_events(candles):
+
+            bos_events = []
+            choch_events = []
+
+            seen_bos = set()
+            seen_choch = set()
+
+            for end in range(
+                25,
+                len(candles) + 1
+            ):
+
+                test_candles = candles[:end]
+
+                market_structure = (
+                    analyze_market_structure(
+                        candles=test_candles,
+                        swing_left=2,
+                        swing_right=2
+                    )
+                )
+
+                bos = detect_bos(
+                    candles=test_candles,
+                    market_structure=market_structure
+                )
+
+                choch = detect_choch(
+                    candles=test_candles,
+                    market_structure=market_structure
+                )
+
+                # --------------------------------------------
+                # BOS
+                # --------------------------------------------
+
+                if bos["bos"]:
+
+                    key = (
+                        bos["direction"],
+                        bos["break_index"]
+                    )
+
+                    if key not in seen_bos:
+
+                        seen_bos.add(key)
+
+                        bos_events.append(
+                            bos
+                        )
+
+                # --------------------------------------------
+                # CHOCH
+                # --------------------------------------------
+
+                if choch["choch"]:
+
+                    key = (
+                        choch["direction"],
+                        choch["break_index"]
+                    )
+
+                    if key not in seen_choch:
+
+                        seen_choch.add(key)
+
+                        choch_events.append(
+                            choch
+                        )
+
+            return (
+                bos_events,
+                choch_events
+            )
+
+        # ====================================================
+        # Historical Scan
+        # ====================================================
+
+        bos_4h, choch_4h = scan_historical_events(
+            four_hour_candles
+        )
+
+        bos_1h, choch_1h = scan_historical_events(
+            one_hour_candles
+        )
+
+        bos_15m, choch_15m = scan_historical_events(
+            fifteen_minute_candles
+        )
+
+        # ====================================================
+        # شمارش جهت‌ها
+        # ====================================================
+
+        def count_direction(events, direction):
+
+            return sum(
+                1
+                for event in events
+                if event["direction"] == direction
+            )
+
+        # 4H
+        bullish_bos_4h = count_direction(
+            bos_4h,
+            "BULLISH"
+        )
+
+        bearish_bos_4h = count_direction(
+            bos_4h,
+            "BEARISH"
+        )
+
+        bullish_choch_4h = count_direction(
+            choch_4h,
+            "BULLISH"
+        )
+
+        bearish_choch_4h = count_direction(
+            choch_4h,
+            "BEARISH"
+        )
+
+        # 1H
+        bullish_bos_1h = count_direction(
+            bos_1h,
+            "BULLISH"
+        )
+
+        bearish_bos_1h = count_direction(
+            bos_1h,
+            "BEARISH"
+        )
+
+        bullish_choch_1h = count_direction(
+            choch_1h,
+            "BULLISH"
+        )
+
+        bearish_choch_1h = count_direction(
+            choch_1h,
+            "BEARISH"
+        )
+
+        # 15M
+        bullish_bos_15m = count_direction(
+            bos_15m,
+            "BULLISH"
+        )
+
+        bearish_bos_15m = count_direction(
+            bos_15m,
+            "BEARISH"
+        )
+
+        bullish_choch_15m = count_direction(
+            choch_15m,
+            "BULLISH"
+        )
+
+        bearish_choch_15m = count_direction(
+            choch_15m,
+            "BEARISH"
+        )
+
+        # ====================================================
+        # پیام
+        # ====================================================
+
+        message = (
+            f"🧪 Historical MTF Structure Test\n\n"
+            f"🪙 {symbol}/USD\n\n"
+
+            f"━━ 4H ━━\n"
+            f"🕯 کندل: {len(four_hour_candles)}\n"
+            f"🟢 BOS صعودی: {bullish_bos_4h}\n"
+            f"🔴 BOS نزولی: {bearish_bos_4h}\n"
+            f"📊 BOS مجموع: {len(bos_4h)}\n"
+            f"🟢 CHOCH صعودی: {bullish_choch_4h}\n"
+            f"🔴 CHOCH نزولی: {bearish_choch_4h}\n"
+            f"📊 CHOCH مجموع: {len(choch_4h)}\n\n"
+
+            f"━━ 1H ━━\n"
+            f"🕯 کندل: {len(one_hour_candles)}\n"
+            f"🟢 BOS صعودی: {bullish_bos_1h}\n"
+            f"🔴 BOS نزولی: {bearish_bos_1h}\n"
+            f"📊 BOS مجموع: {len(bos_1h)}\n"
+            f"🟢 CHOCH صعودی: {bullish_choch_1h}\n"
+            f"🔴 CHOCH نزولی: {bearish_choch_1h}\n"
+            f"📊 CHOCH مجموع: {len(choch_1h)}\n\n"
+
+            f"━━ 15M ━━\n"
+            f"🕯 کندل: {len(fifteen_minute_candles)}\n"
+            f"🟢 BOS صعودی: {bullish_bos_15m}\n"
+            f"🔴 BOS نزولی: {bearish_bos_15m}\n"
+            f"📊 BOS مجموع: {len(bos_15m)}\n"
+            f"🟢 CHOCH صعودی: {bullish_choch_15m}\n"
+            f"🔴 CHOCH نزولی: {bearish_choch_15m}\n"
+            f"📊 CHOCH مجموع: {len(choch_15m)}"
+        )
+
+        await update.message.reply_text(
+            message
+        )
+
+    except Exception as exc:
+
+        print(
+            f"Historical MTF Test error: {exc}",
+            flush=True
+        )
+
+        await update.message.reply_text(
+            "❌ در تست تاریخی MTF خطایی رخ داد."
+        )
 async def analyze_multi_timeframe(symbol):
     """15m = کوتاه‌مدت، 1h = روند اصلی، 6h = ساختار بالاتر."""
     symbol = symbol.upper()
@@ -5056,6 +5347,12 @@ async def start_telegram():
         CommandHandler(
             "testmtf",
             test_mtf_structure
+        )
+    )
+    telegram_application.add_handler(
+        CommandHandler(
+            "testmtfhistory",
+            test_mtf_historical
         )
     )
 
