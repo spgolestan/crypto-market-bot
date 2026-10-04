@@ -4053,30 +4053,95 @@ def build_mtf_structure_engine(
 def format_mtf_event(event, event_name):
     """
     Convert BOS / CHOCH event into readable text.
+
+    Handles detectors that return dictionaries even
+    when no event was detected.
     """
 
     if not event:
         return "—"
 
-    direction = event.get(
-        "direction"
-    )
+    if isinstance(event, dict):
 
-    if not direction:
-        return event_name
+        # ----------------------------------------------------
+        # اگر detector صراحتاً گفته event وجود ندارد
+        # ----------------------------------------------------
 
-    level = event.get(
-        "level"
-    )
-
-    if level is not None:
-        return (
-            f"{event_name} {direction}"
-            f" @ {float(level):,.2f}"
+        flag_key = (
+            "bos"
+            if event_name == "BOS"
+            else "choch"
         )
 
-    return f"{event_name} {direction}"
+        if (
+            flag_key in event
+            and event[flag_key] is False
+        ):
+            return "—"
 
+        if (
+            "detected" in event
+            and event["detected"] is False
+        ):
+            return "—"
+
+        # ----------------------------------------------------
+        # Direction
+        # ----------------------------------------------------
+
+        direction = (
+            event.get("direction")
+            or event.get("bias")
+            or event.get("side")
+            or event.get("trend")
+        )
+
+        # بعضی detectorها direction را با boolean می‌دهند
+        if not direction:
+            if event.get("bullish") is True:
+                direction = "BULLISH"
+            elif event.get("bearish") is True:
+                direction = "BEARISH"
+
+        # ----------------------------------------------------
+        # Level
+        # ----------------------------------------------------
+
+        level = event.get("level")
+
+        if direction and level is not None:
+            return (
+                f"{event_name} {direction}"
+                f" @ {float(level):,.2f}"
+            )
+
+        if direction:
+            return f"{event_name} {direction}"
+
+        # ----------------------------------------------------
+        # اگر event نوع مشخصی دارد
+        # ----------------------------------------------------
+
+        event_type = (
+            event.get("event_type")
+            or event.get("type")
+            or event.get("event")
+            or event.get("break_type")
+        )
+
+        if event_type:
+            return str(event_type)
+
+        return "—"
+
+    # --------------------------------------------------------
+    # اگر detector مستقیم string برگرداند
+    # --------------------------------------------------------
+
+    if isinstance(event, str):
+        return event
+
+    return "—"
 
 def format_mtf_last_break(event):
     """
