@@ -3910,6 +3910,359 @@ async def fetch_candles_time_range(
         )
 
         return []
+# ============================================================
+# MTF STRUCTURE ENGINE
+# 4H = Macro / 1H = Main / 15M = Confirmation
+# ============================================================
+
+def build_mtf_structure_engine(
+    candles_4h,
+    candles_1h,
+    candles_15m
+):
+    """
+    Build a top-down MTF structure snapshot.
+
+    4H -> Macro Structure
+    1H  -> Main Structure
+    15M -> Confirmation Structure
+
+    Alignment uses weighted Market Structure:
+    4H = weight 3
+    1H  = weight 2
+    15M = weight 1
+
+    BOS / CHOCH are included as event context.
+    Retest will be added in the next step.
+    """
+
+    timeframe_data = {
+        "4H": candles_4h,
+        "1H": candles_1h,
+        "15M": candles_15m,
+    }
+
+    timeframe_weights = {
+        "4H": 3,
+        "1H": 2,
+        "15M": 1,
+    }
+
+    snapshots = {}
+    alignment_score = 0
+
+    for timeframe, candles in timeframe_data.items():
+        if len(candles) < 30:
+            snapshots[timeframe] = {
+                "structure": None,
+                "bullish_score": 0,
+                "bearish_score": 0,
+                "swing_highs": [],
+                "swing_lows": [],
+                "current_bos": None,
+                "current_choch": None,
+                "last_break_event": None,
+            }
+            continue
+
+        market_structure = analyze_market_structure(
+            candles
+        )
+
+        current_bos = detect_bos(
+            candles,
+            market_structure
+        )
+
+        current_choch = detect_choch(
+            candles,
+            market_structure
+        )
+
+        last_break_event = find_last_break_event(
+            candles,
+            market_structure
+        )
+
+        structure_direction = market_structure.get(
+            "overall_structure"
+        )
+
+        if structure_direction == "BULLISH":
+            alignment_score += timeframe_weights[timeframe]
+
+        elif structure_direction == "BEARISH":
+            alignment_score -= timeframe_weights[timeframe]
+
+        snapshots[timeframe] = {
+            "structure": structure_direction,
+            "bullish_score": market_structure.get(
+                "bullish_score",
+                0
+            ),
+            "bearish_score": market_structure.get(
+                "bearish_score",
+                0
+            ),
+            "swing_highs": market_structure.get(
+                "swing_highs",
+                []
+            ),
+            "swing_lows": market_structure.get(
+                "swing_lows",
+                []
+            ),
+            "latest_high": market_structure.get(
+                "latest_high"
+            ),
+            "previous_high": market_structure.get(
+                "previous_high"
+            ),
+            "latest_low": market_structure.get(
+                "latest_low"
+            ),
+            "previous_low": market_structure.get(
+                "previous_low"
+            ),
+            "current_bos": current_bos,
+            "current_choch": current_choch,
+            "last_break_event": last_break_event,
+        }
+
+    # --------------------------------------------------------
+    # Final MTF alignment
+    # Score range:
+    #   +6 = all bullish
+    #   -6 = all bearish
+    # --------------------------------------------------------
+
+    if alignment_score >= 4:
+        alignment = "BULLISH"
+
+    elif alignment_score <= -4:
+        alignment = "BEARISH"
+
+    else:
+        alignment = "MIXED"
+
+    return {
+        "alignment": alignment,
+        "alignment_score": alignment_score,
+        "timeframes": snapshots,
+    }
+
+
+def format_mtf_event(event):
+    """
+    Convert BOS / CHOCH event into a readable text.
+    """
+
+    if not event:
+        return "—"
+
+    event_type = event.get(
+        "type",
+        event.get("event", "EVENT")
+    )
+
+    direction = event.get(
+        "direction",
+        ""
+    )
+
+    if direction:
+        return f"{event_type} {direction}"
+
+    return str(event_type)
+
+
+def format_mtf_last_break(event):
+    """
+    Convert historical last break event into readable text.
+    """
+
+    if not event:
+        return "—"
+
+    event_type = event.get(
+        "type",
+        event.get("event", "BREAK")
+    )
+
+    direction = event.get(
+        "direction",
+        ""
+    )
+
+    level = event.get(
+        "level"
+    )
+
+    if level is not None:
+        return (
+            f"{event_type} {direction} "
+            f"@ {float(level):,.2f}"
+        )
+
+    return f"{event_type} {direction}"
+
+
+# ============================================================
+# TEST MTF STRUCTURE ENGINE
+# ============================================================
+
+async def test_mtf_engine(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    args = context.args
+
+    if not args:
+        await update.message.reply_text(
+            "فرمت صحیح:\n"
+            "/testmtfengine BTC\n"
+            "/testmtfengine ETH"
+        )
+        return
+
+    symbol = args[0].upper()
+
+    if symbol not in SUPPORTED_SYMBOLS:
+        await update.message.reply_text(
+            "فقط BTC یا ETH پشتیبانی می‌شود."
+        )
+        return
+
+    try:
+        # ====================================================
+        # 1H
+        # ====================================================
+
+        one_hour_candles = await fetch_candles(
+            SUPPORTED_SYMBOLS[symbol],
+            3600
+        )
+
+        if len(one_hour_candles) < 30:
+            await update.message.reply_text(
+                "داده 1H کافی نیست."
+            )
+            return
+
+        # حذف آخرین کندل باز
+        one_hour_candles = one_hour_candles[:-1]
+
+        # ====================================================
+        # 4H
+        # ====================================================
+
+        four_hour_candles = aggregate_candles_to_4h(
+            one_hour_candles
+        )
+
+        # ====================================================
+        # 15M
+        # همان بازه زمانی 1H
+        # ====================================================
+
+        range_start = one_hour_candles[0]["time"]
+        range_end = one_hour_candles[-1]["time"]
+
+        fifteen_minute_candles = (
+            await fetch_candles_time_range(
+                SUPPORTED_SYMBOLS[symbol],
+                900,
+                range_start,
+                range_end
+            )
+        )
+
+        if len(fifteen_minute_candles) > 1:
+            # حذف آخرین کندل باز احتمالی
+            fifteen_minute_candles = (
+                fifteen_minute_candles[:-1]
+            )
+
+        # ====================================================
+        # Engine
+        # ====================================================
+
+        mtf = build_mtf_structure_engine(
+            four_hour_candles,
+            one_hour_candles,
+            fifteen_minute_candles
+        )
+
+        tf_4h = mtf["timeframes"]["4H"]
+        tf_1h = mtf["timeframes"]["1H"]
+        tf_15m = mtf["timeframes"]["15M"]
+
+        # ====================================================
+        # Result
+        # ====================================================
+
+        message = (
+            "🧠 MTF Structure Engine\n\n"
+            f"🪙 {symbol}/USD\n\n"
+
+            "━━ 4H | Macro ━━\n"
+            f"🧭 Structure: {tf_4h['structure']}\n"
+            f"🔺 Swing High: "
+            f"{len(tf_4h['swing_highs'])}\n"
+            f"🔻 Swing Low: "
+            f"{len(tf_4h['swing_lows'])}\n"
+            f"⚡ Current BOS: "
+            f"{format_mtf_event(tf_4h['current_bos'])}\n"
+            f"🔄 Current CHOCH: "
+            f"{format_mtf_event(tf_4h['current_choch'])}\n"
+            f"🕘 Last Break: "
+            f"{format_mtf_last_break(tf_4h['last_break_event'])}\n\n"
+
+            "━━ 1H | Main ━━\n"
+            f"🧭 Structure: {tf_1h['structure']}\n"
+            f"🔺 Swing High: "
+            f"{len(tf_1h['swing_highs'])}\n"
+            f"🔻 Swing Low: "
+            f"{len(tf_1h['swing_lows'])}\n"
+            f"⚡ Current BOS: "
+            f"{format_mtf_event(tf_1h['current_bos'])}\n"
+            f"🔄 Current CHOCH: "
+            f"{format_mtf_event(tf_1h['current_choch'])}\n"
+            f"🕘 Last Break: "
+            f"{format_mtf_last_break(tf_1h['last_break_event'])}\n\n"
+
+            "━━ 15M | Confirmation ━━\n"
+            f"🧭 Structure: {tf_15m['structure']}\n"
+            f"🔺 Swing High: "
+            f"{len(tf_15m['swing_highs'])}\n"
+            f"🔻 Swing Low: "
+            f"{len(tf_15m['swing_lows'])}\n"
+            f"⚡ Current BOS: "
+            f"{format_mtf_event(tf_15m['current_bos'])}\n"
+            f"🔄 Current CHOCH: "
+            f"{format_mtf_event(tf_15m['current_choch'])}\n"
+            f"🕘 Last Break: "
+            f"{format_mtf_last_break(tf_15m['last_break_event'])}\n\n"
+
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 MTF Alignment: {mtf['alignment']}\n"
+            f"📊 Alignment Score: "
+            f"{mtf['alignment_score']:+d} / 6"
+        )
+
+        await update.message.reply_text(
+            message
+        )
+
+    except Exception as exc:
+        print(
+            f"test_mtf_engine error: {exc}",
+            flush=True
+        )
+
+        await update.message.reply_text(
+            "❌ خطا در اجرای MTF Structure Engine"
+        )
 async def test_mtf_historical(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     symbol = "BTC"
@@ -5479,6 +5832,7 @@ async def start_telegram():
             test_mtf_historical
         )
     )
+    telegram_application.add_handler( CommandHandler( "testmtfengine", test_mtf_engine ) )
 
     await telegram_application.initialize()
 
