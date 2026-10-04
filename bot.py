@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import httpx
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+from datetime import datetime, timezone
 
 
 # =========================
@@ -3797,6 +3798,118 @@ async def test_mtf_structure(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(
             "❌ در تست MTF Market Structure خطایی رخ داد."
         )
+async def fetch_candles_time_range(
+    product_id,
+    granularity,
+    start_timestamp,
+    end_timestamp
+):
+    """
+    Fetch candles across a larger time range
+    by splitting the request into smaller chunks.
+    """
+
+    all_data = []
+
+    max_candles = 300
+
+    chunk_seconds = (
+        max_candles * granularity
+    )
+
+    cursor_end = end_timestamp + granularity
+
+    try:
+
+        while cursor_end > start_timestamp:
+
+            cursor_start = max(
+                start_timestamp,
+                cursor_end - chunk_seconds
+            )
+
+            start_iso = datetime.fromtimestamp(
+                cursor_start,
+                tz=timezone.utc
+            ).isoformat()
+
+            end_iso = datetime.fromtimestamp(
+                cursor_end,
+                tz=timezone.utc
+            ).isoformat()
+
+            url = (
+                f"https://api.exchange.coinbase.com/"
+                f"products/{product_id}/candles"
+            )
+
+            async with httpx.AsyncClient(timeout=15) as client:
+
+                response = await client.get(
+                    url,
+                    params={
+                        "granularity": granularity,
+                        "start": start_iso,
+                        "end": end_iso,
+                    },
+                    headers={
+                        "Accept": "application/json"
+                    }
+                )
+
+                response.raise_for_status()
+
+                data = response.json()
+
+            if not data:
+                break
+
+            all_data.extend(data)
+
+            earliest_timestamp = min(
+                candle[0]
+                for candle in data
+            )
+
+            if (
+                earliest_timestamp
+                >= cursor_end
+            ):
+                break
+
+            cursor_end = earliest_timestamp
+
+        # حذف کندل‌های تکراری
+        unique_data = {
+            candle[0]: candle
+            for candle in all_data
+        }
+
+        sorted_data = sorted(
+            unique_data.values(),
+            key=lambda x: x[0]
+        )
+
+        return [
+            {
+                "time": int(candle[0]),
+                "low": float(candle[1]),
+                "high": float(candle[2]),
+                "open": float(candle[3]),
+                "close": float(candle[4]),
+                "volume": float(candle[5]),
+            }
+            for candle in sorted_data
+        ]
+
+    except Exception as exc:
+
+        print(
+            f"Range candles error: {exc}",
+            flush=True
+        )
+
+        return []
 async def test_mtf_historical(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     symbol = "BTC"
@@ -3823,9 +3936,20 @@ async def test_mtf_historical(update: Update, context: ContextTypes.DEFAULT_TYPE
             3600
         )
 
-        fifteen_minute_candles = await fetch_candles(
-            SUPPORTED_SYMBOLS[symbol],
-            900
+        # ====================================================
+        # 15M با همان بازه زمانی 1H
+        # ====================================================
+
+        range_start = one_hour_candles[0]["time"]
+        range_end = one_hour_candles[-1]["time"]
+
+        fifteen_minute_candles = (
+            await fetch_candles_time_range(
+                SUPPORTED_SYMBOLS[symbol],
+                900,
+                range_start,
+                range_end
+            )
         )
 
         if len(one_hour_candles) < 30:
