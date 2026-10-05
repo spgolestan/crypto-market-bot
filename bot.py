@@ -3995,6 +3995,7 @@ def build_mtf_structure_engine(
             alignment_score -= timeframe_weights[timeframe]
 
         snapshots[timeframe] = {
+            "last_break_retest": last_break_retest,
             "structure": structure_direction,
             "bullish_score": market_structure.get(
                 "bullish_score",
@@ -4188,6 +4189,38 @@ def format_mtf_last_break(event):
         return f"{event_type} {direction}"
 
     return str(event_type)
+def format_mtf_retest(retest):
+    """
+    Convert retest result into readable text.
+    """
+
+    if not retest:
+        return "—"
+
+    if not retest.get("retest"):
+        return "NO RETEST"
+
+    direction = retest.get(
+        "direction",
+        ""
+    )
+
+    level = retest.get(
+        "level"
+    )
+
+    bars_since_break = retest.get(
+        "bars_since_break"
+    )
+
+    if level is not None:
+        return (
+            f"RETEST {direction}"
+            f" @ {float(level):,.2f}"
+            f" | {bars_since_break} bars"
+        )
+
+    return f"RETEST {direction}"
 # ============================================================
 # TEST MTF STRUCTURE ENGINE
 # ============================================================
@@ -4298,6 +4331,8 @@ async def test_mtf_engine(
             f"{format_mtf_event( tf_4h["current_choch"], "CHOCH" )}\n"
             f"🕘 Last Break: "
             f"{format_mtf_last_break(tf_4h['last_break_event'])}\n\n"
+            f"🔁 Retest: "
+            f"{format_mtf_retest(tf_4h['last_break_retest'])}\n"
 
             "━━ 1H | Main ━━\n"
             f"🧭 Structure: {tf_1h['structure']}\n"
@@ -4311,6 +4346,8 @@ async def test_mtf_engine(
             f"{format_mtf_event(tf_1h["current_choch"], "CHOCH")}\n"
             f"🕘 Last Break: "
             f"{format_mtf_last_break(tf_1h['last_break_event'])}\n\n"
+            f"🔁 Retest: "
+            f"{format_mtf_retest(tf_1h['last_break_retest'])}\n"
 
             "━━ 15M | Confirmation ━━\n"
             f"🧭 Structure: {tf_15m['structure']}\n"
@@ -4324,6 +4361,8 @@ async def test_mtf_engine(
             f"{format_mtf_event(tf_15m["current_choch"], "CHOCH")}\n"
             f"🕘 Last Break: "
             f"{format_mtf_last_break(tf_15m['last_break_event'])}\n\n"
+            f"🔁 Retest: "
+            f"{format_mtf_retest(tf_15m['last_break_retest'])}\n"
 
             "━━━━━━━━━━━━━━━━━━\n"
             f"🎯 MTF Alignment: {mtf['alignment']}\n"
