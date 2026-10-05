@@ -3914,7 +3914,6 @@ async def fetch_candles_time_range(
 # MTF STRUCTURE ENGINE
 # 4H = Macro / 1H = Main / 15M = Confirmation
 # ============================================================
-
 def build_mtf_structure_engine(
     candles_4h,
     candles_1h,
@@ -3923,17 +3922,14 @@ def build_mtf_structure_engine(
     """
     Build a top-down MTF structure snapshot.
 
-    4H -> Macro Structure
-    1H  -> Main Structure
-    15M -> Confirmation Structure
+    4H  = Macro Structure
+    1H  = Main Structure
+    15M = Confirmation Structure
 
-    Alignment uses weighted Market Structure:
-    4H = weight 3
+    Alignment:
+    4H  = weight 3
     1H  = weight 2
     15M = weight 1
-
-    BOS / CHOCH are included as event context.
-    Retest will be added in the next step.
     """
 
     timeframe_data = {
@@ -3952,6 +3948,11 @@ def build_mtf_structure_engine(
     alignment_score = 0
 
     for timeframe, candles in timeframe_data.items():
+
+        # ----------------------------------------------------
+        # داده کافی نیست
+        # ----------------------------------------------------
+
         if len(candles) < 30:
             snapshots[timeframe] = {
                 "structure": None,
@@ -3959,15 +3960,28 @@ def build_mtf_structure_engine(
                 "bearish_score": 0,
                 "swing_highs": [],
                 "swing_lows": [],
+                "latest_high": None,
+                "previous_high": None,
+                "latest_low": None,
+                "previous_low": None,
                 "current_bos": None,
                 "current_choch": None,
                 "last_break_event": None,
+                "last_break_retest": None,
             }
             continue
+
+        # ----------------------------------------------------
+        # Market Structure
+        # ----------------------------------------------------
 
         market_structure = analyze_market_structure(
             candles
         )
+
+        # ----------------------------------------------------
+        # Current BOS / CHOCH
+        # ----------------------------------------------------
 
         current_bos = detect_bos(
             candles,
@@ -3979,10 +3993,30 @@ def build_mtf_structure_engine(
             market_structure
         )
 
+        # ----------------------------------------------------
+        # Last Historical Break
+        # ----------------------------------------------------
+
         last_break_event = find_last_break_event(
             candles,
             market_structure
         )
+
+        # ----------------------------------------------------
+        # Retest of Last Break
+        # ----------------------------------------------------
+
+        if last_break_event:
+            last_break_retest = detect_retest(
+                candles,
+                last_break_event
+            )
+        else:
+            last_break_retest = None
+
+        # ----------------------------------------------------
+        # Structure Direction
+        # ----------------------------------------------------
 
         structure_direction = market_structure.get(
             "overall_structure"
@@ -3994,47 +4028,63 @@ def build_mtf_structure_engine(
         elif structure_direction == "BEARISH":
             alignment_score -= timeframe_weights[timeframe]
 
+        # ----------------------------------------------------
+        # Snapshot
+        # ----------------------------------------------------
+
         snapshots[timeframe] = {
-            "last_break_retest": last_break_retest,
             "structure": structure_direction,
+
             "bullish_score": market_structure.get(
                 "bullish_score",
                 0
             ),
+
             "bearish_score": market_structure.get(
                 "bearish_score",
                 0
             ),
+
             "swing_highs": market_structure.get(
                 "swing_highs",
                 []
             ),
+
             "swing_lows": market_structure.get(
                 "swing_lows",
                 []
             ),
+
             "latest_high": market_structure.get(
                 "latest_high"
             ),
+
             "previous_high": market_structure.get(
                 "previous_high"
             ),
+
             "latest_low": market_structure.get(
                 "latest_low"
             ),
+
             "previous_low": market_structure.get(
                 "previous_low"
             ),
+
             "current_bos": current_bos,
+
             "current_choch": current_choch,
+
             "last_break_event": last_break_event,
+
+            "last_break_retest": last_break_retest,
         }
 
     # --------------------------------------------------------
-    # Final MTF alignment
-    # Score range:
-    #   +6 = all bullish
-    #   -6 = all bearish
+    # Final MTF Alignment
+    #
+    # +6 = all bullish
+    # -6 = all bearish
     # --------------------------------------------------------
 
     if alignment_score >= 4:
