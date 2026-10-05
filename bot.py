@@ -4275,6 +4275,489 @@ def format_mtf_retest(retest):
 # TEST MTF STRUCTURE ENGINE
 # ============================================================
 
+# ============================================================
+# OPPORTUNITY ENGINE
+# Structure + Break + Retest + MTF Alignment
+# ============================================================
+
+def get_event_type(event):
+    """
+    Extract BOS / CHOCH type from an event dictionary.
+    """
+
+    if not event or not isinstance(event, dict):
+        return None
+
+    event_type = (
+        event.get("event_type")
+        or event.get("type")
+        or event.get("event")
+        or event.get("break_type")
+    )
+
+    if event_type:
+        return str(event_type).upper()
+
+    return None
+
+
+def get_event_direction(event):
+    """
+    Extract BULLISH / BEARISH direction.
+    """
+
+    if not event or not isinstance(event, dict):
+        return None
+
+    direction = (
+        event.get("direction")
+        or event.get("bias")
+        or event.get("side")
+        or event.get("trend")
+    )
+
+    if direction:
+        return str(direction).upper()
+
+    return None
+
+
+def evaluate_mtf_opportunity(mtf):
+    """
+    Evaluate MTF opportunity quality.
+
+    Structure weights:
+        4H  = 3
+        1H  = 2
+        15M = 1
+
+    Break contribution:
+        4H  = 2
+        1H  = 1
+        15M = 1
+
+    Retest contribution:
+        4H  = 2
+        1H  = 2
+        15M = 1
+
+    The engine does NOT issue a trading instruction.
+    It only evaluates structural opportunity quality.
+    """
+
+    timeframes = mtf.get(
+        "timeframes",
+        {}
+    )
+
+    alignment = mtf.get(
+        "alignment",
+        "MIXED"
+    )
+
+    alignment_score = mtf.get(
+        "alignment_score",
+        0
+    )
+
+    if alignment not in {
+        "BULLISH",
+        "BEARISH"
+    }:
+        return {
+            "bias": "MIXED",
+            "score": 0,
+            "max_score": 16,
+            "quality": "NONE",
+            "status": "WAIT",
+            "ready": False,
+            "reason": "MTF structure is MIXED",
+            "details": {},
+        }
+
+    bias = alignment
+
+    structure_weights = {
+        "4H": 3,
+        "1H": 2,
+        "15M": 1,
+    }
+
+    break_weights = {
+        "4H": 2,
+        "1H": 1,
+        "15M": 1,
+    }
+
+    retest_weights = {
+        "4H": 2,
+        "1H": 2,
+        "15M": 1,
+    }
+
+    score = 0
+    details = {}
+
+    aligned_retests = []
+    opposing_retests = []
+
+    aligned_breaks = []
+    opposing_breaks = []
+
+    # --------------------------------------------------------
+    # Evaluate each timeframe
+    # --------------------------------------------------------
+
+    for timeframe in [
+        "4H",
+        "1H",
+        "15M"
+    ]:
+
+        snapshot = timeframes.get(
+            timeframe,
+            {}
+        )
+
+        structure = snapshot.get(
+            "structure"
+        )
+
+        timeframe_score = 0
+
+        # ----------------------------------------------------
+        # Structure
+        # ----------------------------------------------------
+
+        if structure == bias:
+            timeframe_score += (
+                structure_weights[timeframe]
+            )
+
+        elif (
+            structure in {
+                "BULLISH",
+                "BEARISH"
+            }
+            and structure != bias
+        ):
+            timeframe_score -= (
+                structure_weights[timeframe]
+            )
+
+        # ----------------------------------------------------
+        # Last Break
+        # ----------------------------------------------------
+
+        last_break = snapshot.get(
+            "last_break_event"
+        )
+
+        break_type = get_event_type(
+            last_break
+        )
+
+        break_direction = get_event_direction(
+            last_break
+        )
+
+        if break_direction == bias:
+
+            if break_type == "BOS":
+                timeframe_score += (
+                    break_weights[timeframe]
+                )
+                aligned_breaks.append(
+                    timeframe
+                )
+
+            elif break_type == "CHOCH":
+                timeframe_score += (
+                    max(
+                        1,
+                        break_weights[timeframe] - 1
+                    )
+                )
+                aligned_breaks.append(
+                    timeframe
+                )
+
+        elif (
+            break_direction in {
+                "BULLISH",
+                "BEARISH"
+            }
+            and break_direction != bias
+        ):
+
+            timeframe_score -= (
+                break_weights[timeframe]
+            )
+
+            opposing_breaks.append(
+                timeframe
+            )
+
+        # ----------------------------------------------------
+        # Retest
+        # ----------------------------------------------------
+
+        retest = snapshot.get(
+            "last_break_retest"
+        )
+
+        retest_valid = (
+            isinstance(retest, dict)
+            and retest.get("retest") is True
+        )
+
+        retest_direction = None
+
+        if retest_valid:
+
+            retest_direction = (
+                get_event_direction(
+                    retest
+                )
+            )
+
+            # detect_retest uses "direction"
+            if not retest_direction:
+                direction_value = retest.get(
+                    "direction"
+                )
+
+                if direction_value:
+                    retest_direction = str(
+                        direction_value
+                    ).upper()
+
+            if retest_direction == bias:
+                timeframe_score += (
+                    retest_weights[timeframe]
+                )
+
+                aligned_retests.append(
+                    timeframe
+                )
+
+            elif (
+                retest_direction in {
+                    "BULLISH",
+                    "BEARISH"
+                }
+                and retest_direction != bias
+            ):
+                timeframe_score -= (
+                    retest_weights[timeframe]
+                )
+
+                opposing_retests.append(
+                    timeframe
+                )
+
+        score += timeframe_score
+
+        details[timeframe] = {
+            "structure": structure,
+            "break_type": break_type,
+            "break_direction": break_direction,
+            "retest": retest_valid,
+            "retest_direction": retest_direction,
+            "score": timeframe_score,
+        }
+
+    # --------------------------------------------------------
+    # Bonus:
+    # 4H + 1H structure agree with the final bias
+    # --------------------------------------------------------
+
+    structure_4h = timeframes.get(
+        "4H",
+        {}
+    ).get("structure")
+
+    structure_1h = timeframes.get(
+        "1H",
+        {}
+    ).get("structure")
+
+    if (
+        structure_4h == bias
+        and structure_1h == bias
+    ):
+        score += 1
+
+    # --------------------------------------------------------
+    # Opportunity Readiness
+    #
+    # We require:
+    # 1) MTF alignment
+    # 2) 4H + 1H structural agreement
+    # 3) At least one aligned retest on 1H or 15M
+    # 4) No opposing 4H retest
+    # --------------------------------------------------------
+
+    lower_tf_retest = (
+        "1H" in aligned_retests
+        or "15M" in aligned_retests
+    )
+
+    opposing_macro_retest = (
+        "4H" in opposing_retests
+    )
+
+    ready = (
+        structure_4h == bias
+        and structure_1h == bias
+        and lower_tf_retest
+        and not opposing_macro_retest
+        and score >= 7
+    )
+
+    # --------------------------------------------------------
+    # Quality
+    # --------------------------------------------------------
+
+    if score >= 11:
+        quality = "HIGH"
+
+    elif score >= 7:
+        quality = "MEDIUM"
+
+    elif score >= 4:
+        quality = "LOW"
+
+    else:
+        quality = "NONE"
+
+    # --------------------------------------------------------
+    # Status
+    # --------------------------------------------------------
+
+    if ready and quality == "HIGH":
+        status = "HIGH OPPORTUNITY"
+
+    elif ready:
+        status = "OPPORTUNITY CANDIDATE"
+
+    elif opposing_macro_retest:
+        status = "BLOCKED BY 4H RETEST"
+
+    elif not lower_tf_retest:
+        status = "WAIT FOR RETEST"
+
+    elif score < 4:
+        status = "LOW CONFIDENCE"
+
+    else:
+        status = "WATCH"
+
+    # --------------------------------------------------------
+    # Reason
+    # --------------------------------------------------------
+
+    reasons = []
+
+    if structure_4h == bias:
+        reasons.append(
+            "4H aligned"
+        )
+    else:
+        reasons.append(
+            "4H not aligned"
+        )
+
+    if structure_1h == bias:
+        reasons.append(
+            "1H aligned"
+        )
+    else:
+        reasons.append(
+            "1H not aligned"
+        )
+
+    if aligned_retests:
+        reasons.append(
+            "Retest confirmed: "
+            + ", ".join(aligned_retests)
+        )
+    else:
+        reasons.append(
+            "No aligned lower-TF Retest"
+        )
+
+    if opposing_macro_retest:
+        reasons.append(
+            "Opposing 4H Retest"
+        )
+
+    return {
+        "bias": bias,
+        "score": score,
+        "max_score": 16,
+        "quality": quality,
+        "status": status,
+        "ready": ready,
+        "reason": " | ".join(reasons),
+        "alignment_score": alignment_score,
+        "aligned_breaks": aligned_breaks,
+        "opposing_breaks": opposing_breaks,
+        "aligned_retests": aligned_retests,
+        "opposing_retests": opposing_retests,
+        "details": details,
+    }
+
+
+def format_opportunity_status(opportunity):
+    """
+    Format Opportunity Engine result.
+    """
+
+    status = opportunity.get(
+        "status",
+        "WAIT"
+    )
+
+    quality = opportunity.get(
+        "quality",
+        "NONE"
+    )
+
+    score = opportunity.get(
+        "score",
+        0
+    )
+
+    max_score = opportunity.get(
+        "max_score",
+        16
+    )
+
+    bias = opportunity.get(
+        "bias",
+        "MIXED"
+    )
+
+    icon = "⏳"
+
+    if status == "HIGH OPPORTUNITY":
+        icon = "🟢"
+
+    elif status == "OPPORTUNITY CANDIDATE":
+        icon = "🟡"
+
+    elif status == "BLOCKED BY 4H RETEST":
+        icon = "🔴"
+
+    return (
+        f"{icon} {status}\n"
+        f"🧭 Bias: {bias}\n"
+        f"⭐ Quality: {quality}\n"
+        f"📊 Opportunity Score: "
+        f"{score} / {max_score}\n"
+        f"📝 {opportunity.get('reason', '')}"
+    )
 async def test_mtf_engine(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
@@ -4356,6 +4839,10 @@ async def test_mtf_engine(
             one_hour_candles,
             fifteen_minute_candles
         )
+        opportunity = evaluate_mtf_opportunity(
+            mtf
+        )
+
 
         tf_4h = mtf["timeframes"]["4H"]
         tf_1h = mtf["timeframes"]["1H"]
@@ -4418,6 +4905,13 @@ async def test_mtf_engine(
             f"🎯 MTF Alignment: {mtf['alignment']}\n"
             f"📊 Alignment Score: "
             f"{mtf['alignment_score']:+d} / 6"
+        )
+        message += (
+            "\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🎯 OPPORTUNITY ENGINE\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"{format_opportunity_status(opportunity)}"
         )
 
         await update.message.reply_text(
